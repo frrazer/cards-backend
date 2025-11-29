@@ -157,9 +157,7 @@ ${generateTemplate(handlers)}
 Outputs:
   ApiEndpoint:
     Description: "API Gateway endpoint URL"
-    Value: !Sub "https://\${MyApi}.execute-api.\${AWS::Region}.amazonaws.com/\${Env}${
-        handlers.find((h) => !h.isCatchAll)?.path || '/'
-    }"
+    Value: !Sub "https://\${MyApi}.execute-api.\${AWS::Region}.amazonaws.com/\${Env}"
 `;
 
     fs.writeFileSync(TEMPLATE_PATH, template, 'utf-8');
