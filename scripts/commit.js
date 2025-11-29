@@ -12,7 +12,7 @@ if (args.length < 2) {
     process.exit(1);
 }
 
-const branch = args[0];
+const branch = 'main';
 const commitMessage = args.slice(1).join(' ');
 
 const commands = [
