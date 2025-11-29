@@ -11,7 +11,8 @@
     "lint": "eslint '*.ts' --quiet --fix",
     "compile": "tsc",
     "test": "npm run compile && npm run unit",
-    "generate:template": "node scripts/generate-template.js"
+    "generate:template": "node scripts/generate-template.js",
+    "commit": "node scripts/commit.js"
   },
   "dependencies": {
     "esbuild": "^0.27.0"

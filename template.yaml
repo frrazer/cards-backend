@@ -45,6 +45,31 @@ Resources:
             Path: /heartbeat
             Method: get
 
+  # ANY /{proxy+}
+  NotFoundFunction:
+    Type: AWS::Serverless::Function
+    Description: Catch-all handler for undefined routes - returns 404
+    Timeout: 3
+    MemorySize: 128
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/notFound.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/notFound.handler
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /{proxy+}
+            Method: any
+
 Outputs:
   ApiEndpoint:
     Description: "API Gateway endpoint URL"

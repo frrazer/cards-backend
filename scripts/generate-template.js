@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-var-requires */
 
 const fs = require('fs');
 const path = require('path');
@@ -12,7 +13,7 @@ const parseHandler = (filePath) => {
 
     if (!docBlock) return null;
 
-    const routeMatch = docBlock.match(/@route\s+(GET|POST|PUT|DELETE|PATCH)\s+(\/[\w\-\/{}]*)/i);
+    const routeMatch = docBlock.match(/@route\s+(GET|POST|PUT|DELETE|PATCH|ANY)\s+(\/[\w\-\/{}+]*)/i);
     if (!routeMatch) return null;
 
     return {
@@ -22,13 +23,19 @@ const parseHandler = (filePath) => {
         timeout: docBlock.match(/@timeout\s+(\d+)/)?.[1],
         memory: docBlock.match(/@memory\s+(\d+)/)?.[1],
         description: docBlock.match(/@description\s+(.+)/)?.[1]?.trim(),
+        isCatchAll: routeMatch[2] === '/{proxy+}',
     };
 };
 
 const getFuncName = (name) => `${name.charAt(0).toUpperCase() + name.slice(1)}Function`;
 
 const generateTemplate = (handlers) => {
-    const resources = handlers
+    // Separate catch-all handlers from regular handlers
+    const regularHandlers = handlers.filter((h) => !h.isCatchAll);
+    const catchAllHandlers = handlers.filter((h) => h.isCatchAll);
+
+    // Regular handlers first
+    const resources = regularHandlers
         .map((h) => {
             const props = [
                 h.description && `    Description: ${h.description}`,
@@ -63,35 +70,43 @@ ${props}
         })
         .join('\n\n');
 
-    return `AWSTemplateFormatVersion: '2010-09-09'
-Transform: AWS::Serverless-2016-10-31
-Description: Scalable TypeScript Backend API - Cards API
+    // Catch-all handlers last (so they don't override specific routes)
+    const catchAllResources = catchAllHandlers
+        .map((h) => {
+            const props = [
+                h.description && `    Description: ${h.description}`,
+                h.timeout && `    Timeout: ${h.timeout}`,
+                h.memory && `    MemorySize: ${h.memory}`,
+            ]
+                .filter(Boolean)
+                .join('\n');
 
-Parameters:
-  Env: { Type: String, Default: dev, AllowedValues: [dev, prod], Description: Environment name }
-
-Globals:
-  Function:
-    Timeout: 3
-    MemorySize: 128
-    Runtime: nodejs20.x
-    Architectures: [arm64]
-    Environment: { Variables: { NODE_ENV: !Ref Env } }
-
-Resources:
-  MyApi:
-    Type: AWS::Serverless::Api
+            return `  # ${h.method} ${h.path}
+  ${getFuncName(h.fileName)}:
+    Type: AWS::Serverless::Function
+${props}
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/${h.fileName}.ts
     Properties:
-      StageName: !Ref Env
-      Cors: { AllowMethods: "'GET,POST,PUT,DELETE,PATCH,OPTIONS'", AllowHeaders: "'Content-Type,Authorization'", AllowOrigin: "'*'" }
+      CodeUri: ./
+      Handler: src/handlers/${h.fileName}.handler
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: ${h.path}
+            Method: ${h.method.toLowerCase()}`;
+        })
+        .join('\n\n');
 
-${resources}
-
-Outputs:
-  ApiEndpoint:
-    Description: "API Gateway endpoint URL"
-    Value: !Sub "https://\${MyApi}.execute-api.\${AWS::Region}.amazonaws.com/\${Env}${handlers[0]?.path || '/'}"
-`;
+    return resources + (catchAllResources ? '\n\n' + catchAllResources : '');
 };
 
 (() => {
@@ -115,6 +130,38 @@ Outputs:
 
     handlers.forEach((h) => console.log(`   • ${h.method.padEnd(6)} ${h.path.padEnd(20)} → ${h.fileName}`));
 
-    fs.writeFileSync(TEMPLATE_PATH, generateTemplate(handlers), 'utf-8');
+    const template = `AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Scalable TypeScript Backend API - Cards API
+
+Parameters:
+  Env: { Type: String, Default: dev, AllowedValues: [dev, prod], Description: Environment name }
+
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+    Runtime: nodejs20.x
+    Architectures: [arm64]
+    Environment: { Variables: { NODE_ENV: !Ref Env } }
+
+Resources:
+  MyApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Env
+      Cors: { AllowMethods: "'GET,POST,PUT,DELETE,PATCH,OPTIONS'", AllowHeaders: "'Content-Type,Authorization'", AllowOrigin: "'*'" }
+
+${generateTemplate(handlers)}
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://\${MyApi}.execute-api.\${AWS::Region}.amazonaws.com/\${Env}${
+        handlers.find((h) => !h.isCatchAll)?.path || '/'
+    }"
+`;
+
+    fs.writeFileSync(TEMPLATE_PATH, template, 'utf-8');
     console.log('\n✨ Template generated successfully: template.yaml');
 })();
