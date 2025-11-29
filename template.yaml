@@ -24,8 +24,6 @@ Resources:
   GetHeartbeatFunction:
     Type: AWS::Serverless::Function
     Description: Health check endpoint for API monitoring
-      Timeout: 3
-      MemorySize: 128
     Metadata:
       BuildMethod: esbuild
       BuildProperties:

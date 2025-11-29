@@ -32,8 +32,8 @@ const generateTemplate = (handlers) => {
         .map((h) => {
             const props = [
                 h.description && `    Description: ${h.description}`,
-                h.timeout && `      Timeout: ${h.timeout}`,
-                h.memory && `      MemorySize: ${h.memory}`,
+                h.timeout && `    Timeout: ${h.timeout}`,
+                h.memory && `    MemorySize: ${h.memory}`,
             ]
                 .filter(Boolean)
                 .join('\n');
