@@ -1,47 +1,31 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: >
-  Scalable TypeScript Backend API - Cards API
+Description: Scalable TypeScript Backend API - Cards API
 
-# 1. PARAMETERS
-# This is new: It allows us to pass "dev" or "prod" when deploying
 Parameters:
-  Env:
-    Type: String
-    Default: dev
-    AllowedValues:
-      - dev
-      - prod
-    Description: Environment name
+  Env: { Type: String, Default: dev, AllowedValues: [dev, prod], Description: Environment name }
 
-# 2. GLOBALS
-# Settings here apply to ALL functions so we don't have to repeat them
 Globals:
   Function:
     Timeout: 3
     MemorySize: 128
-    Runtime: nodejs20.x    # Standard LTS version
-    Architectures:
-      - arm64              # CHEAPER & FASTER than the default x86_64
-    Environment:
-      Variables:
-        NODE_ENV: !Ref Env # Tells your code if it is in Dev or Prod
+    Runtime: nodejs20.x
+    Architectures: [arm64]
+    Environment: { Variables: { NODE_ENV: !Ref Env } }
 
 Resources:
-  # 3. EXPLICIT API GATEWAY
-  # The old template created this "implicitly". We define it here to control CORS.
   MyApi:
     Type: AWS::Serverless::Api
     Properties:
       StageName: !Ref Env
-      Cors: 
-        AllowMethods: "'GET,POST,OPTIONS'"
-        AllowHeaders: "'Content-Type'"
-        AllowOrigin: "'*'"
+      Cors: { AllowMethods: "'GET,POST,PUT,DELETE,PATCH,OPTIONS'", AllowHeaders: "'Content-Type,Authorization'", AllowOrigin: "'*'" }
 
-  # 4. FUNCTION: GET USERS
-  GetUsersFunction:
+  # GET /heartbeat
+  GetHeartbeatFunction:
     Type: AWS::Serverless::Function
+    Description: Health check endpoint for API monitoring
+      Timeout: 3
+      MemorySize: 128
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -49,42 +33,19 @@ Resources:
         Target: "es2020"
         Sourcemap: true
         EntryPoints: 
-          - src/handlers/getUsers.ts  # Pointing to your NEW file location
-    Properties:
-      CodeUri: ./                     # Root folder (since package.json is at root)
-      Handler: src/handlers/getUsers.handler
-      Events:
-        ApiEvent:
-          Type: Api
-          Properties:
-            RestApiId: !Ref MyApi
-            Path: /users
-            Method: get
-
-  # 5. FUNCTION: CREATE USER
-  CreateUserFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: true
-        Target: "es2020"
-        Sourcemap: true
-        EntryPoints: 
-          - src/handlers/createUser.ts # Pointing to your NEW file location
+          - src/handlers/getHeartbeat.ts
     Properties:
       CodeUri: ./
-      Handler: src/handlers/createUser.handler
+      Handler: src/handlers/getHeartbeat.handler
       Events:
         ApiEvent:
           Type: Api
           Properties:
             RestApiId: !Ref MyApi
-            Path: /users
-            Method: post
+            Path: /heartbeat
+            Method: get
 
-# 6. OUTPUTS
 Outputs:
   ApiEndpoint:
     Description: "API Gateway endpoint URL"
-    Value: !Sub "https://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/${Env}/users"
+    Value: !Sub "https://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/${Env}/heartbeat"

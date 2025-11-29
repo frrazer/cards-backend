@@ -10,7 +10,8 @@
     "unit": "jest",
     "lint": "eslint '*.ts' --quiet --fix",
     "compile": "tsc",
-    "test": "npm run compile && npm run unit"
+    "test": "npm run compile && npm run unit",
+    "generate:template": "node scripts/generate-template.js"
   },
   "devDependencies": {
     "@jest/globals": "^29.2.0",
