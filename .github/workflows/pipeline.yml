@@ -36,7 +36,7 @@ jobs:
               run: npm install
 
             - name: SAM Build
-              run: sam build
+              run: sam build --use-container
 
             - name: Deploy to DEV
               if: github.event_name == 'push'
