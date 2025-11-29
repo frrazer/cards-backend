@@ -60,6 +60,9 @@ ${props}
     Properties:
       CodeUri: ./
       Handler: src/handlers/${h.fileName}.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
       Events:
         ApiEvent:
           Type: Api
@@ -96,6 +99,9 @@ ${props}
     Properties:
       CodeUri: ./
       Handler: src/handlers/${h.fileName}.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
       Events:
         ApiEvent:
           Type: Api
@@ -143,7 +149,10 @@ Globals:
     MemorySize: 128
     Runtime: nodejs20.x
     Architectures: [arm64]
-    Environment: { Variables: { NODE_ENV: !Ref Env } }
+    Environment:
+      Variables:
+        NODE_ENV: !Ref Env
+        TABLE_NAME: !Ref MainTable
 
 Resources:
   MyApi:
@@ -152,12 +161,41 @@ Resources:
       StageName: !Ref Env
       Cors: { AllowMethods: "'GET,POST,PUT,DELETE,PATCH,OPTIONS'", AllowHeaders: "'Content-Type,Authorization'", AllowOrigin: "'*'" }
 
+  MainTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "\${AWS::StackName}-\${Env}-table"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+
 ${generateTemplate(handlers)}
 
 Outputs:
   ApiEndpoint:
     Description: "API Gateway endpoint URL"
     Value: !Sub "https://\${MyApi}.execute-api.\${AWS::Region}.amazonaws.com/\${Env}"
+  TableName:
+    Description: "DynamoDB Table Name"
+    Value: !Ref MainTable
+  TableArn:
+    Description: "DynamoDB Table ARN"
+    Value: !GetAtt MainTable.Arn
 `;
 
     fs.writeFileSync(TEMPLATE_PATH, template, 'utf-8');
