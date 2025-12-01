@@ -8,6 +8,7 @@ import {
     QueryCommand,
     BatchGetCommand,
     BatchWriteCommand,
+    TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 
 const client = new DynamoDBClient({});
@@ -94,18 +95,15 @@ export const db = {
         await docClient.send(command);
     },
 
-    // Query items with partition key and optional sort key conditions
     query: async (
         pk: string,
         options?: {
-            // Sort key conditions (choose one)
             skBeginsWith?: string;
             skBetween?: [string, string]; // [start, end]
             skGreaterThan?: string;
             skGreaterThanOrEqual?: string;
             skLessThan?: string;
             skLessThanOrEqual?: string;
-            // Query options
             limit?: number;
             scanIndexForward?: boolean;
             exclusiveStartKey?: Record<string, unknown>;
@@ -114,7 +112,6 @@ export const db = {
         let keyConditionExpression = 'pk = :pk';
         const expressionAttributeValues: Record<string, unknown> = { ':pk': pk };
 
-        // Build sort key condition if provided
         if (options?.skBeginsWith) {
             keyConditionExpression += ' AND begins_with(sk, :skPrefix)';
             expressionAttributeValues[':skPrefix'] = options.skBeginsWith;
@@ -232,6 +229,107 @@ export const db = {
                     DeleteRequest: { Key: key },
                 })),
             },
+        });
+        await docClient.send(command);
+    },
+
+    conditionalPut: async (
+        item: Record<string, unknown>,
+        expectedVersion?: number,
+    ): Promise<{ success: boolean; error?: string }> => {
+        try {
+            const command = new PutCommand({
+                TableName: TABLE_NAME,
+                Item: item,
+                ConditionExpression:
+                    expectedVersion !== undefined ? '#version = :expectedVersion' : 'attribute_not_exists(pk)',
+                ExpressionAttributeNames: expectedVersion !== undefined ? { '#version': 'version' } : undefined,
+                ExpressionAttributeValues:
+                    expectedVersion !== undefined ? { ':expectedVersion': expectedVersion } : undefined,
+            });
+            await docClient.send(command);
+            return { success: true };
+        } catch (error: unknown) {
+            if (error instanceof Error && 'name' in error && error.name === 'ConditionalCheckFailedException') {
+                return { success: false, error: 'Version mismatch or item already exists' };
+            }
+            throw new Error('Unknown error occurred');
+        }
+    },
+
+    transactWrite: async (
+        operations: Array<{
+            type: 'Put' | 'Update' | 'Delete' | 'ConditionCheck';
+            pk: string;
+            sk: string;
+            item?: Record<string, unknown>;
+            updates?: Record<string, unknown>;
+            condition?: string;
+            conditionValues?: Record<string, unknown>;
+        }>,
+    ) => {
+        const transactItems = operations.map((op) => {
+            switch (op.type) {
+                case 'Put':
+                    return {
+                        Put: {
+                            TableName: TABLE_NAME,
+                            Item: { pk: op.pk, sk: op.sk, ...op.item },
+                            ConditionExpression: op.condition,
+                            ExpressionAttributeValues: op.conditionValues,
+                        },
+                    };
+                case 'Update': {
+                    const keys = Object.keys(op.updates || {});
+                    const updateExpressions: string[] = [];
+                    const expressionAttributeNames: Record<string, string> = {};
+                    const expressionAttributeValues: Record<string, unknown> = { ...op.conditionValues };
+
+                    keys.forEach((key, index) => {
+                        const attrName = `#attr${index}`;
+                        const attrValue = `:val${index}`;
+                        updateExpressions.push(`${attrName} = ${attrValue}`);
+                        expressionAttributeNames[attrName] = key;
+                        expressionAttributeValues[attrValue] = op.updates?.[key];
+                    });
+
+                    return {
+                        Update: {
+                            TableName: TABLE_NAME,
+                            Key: { pk: op.pk, sk: op.sk },
+                            UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+                            ConditionExpression: op.condition,
+                            ExpressionAttributeNames:
+                                Object.keys(expressionAttributeNames).length > 0 ? expressionAttributeNames : undefined,
+                            ExpressionAttributeValues: expressionAttributeValues,
+                        },
+                    };
+                }
+                case 'Delete':
+                    return {
+                        Delete: {
+                            TableName: TABLE_NAME,
+                            Key: { pk: op.pk, sk: op.sk },
+                            ConditionExpression: op.condition,
+                            ExpressionAttributeValues: op.conditionValues,
+                        },
+                    };
+                case 'ConditionCheck':
+                    return {
+                        ConditionCheck: {
+                            TableName: TABLE_NAME,
+                            Key: { pk: op.pk, sk: op.sk },
+                            ConditionExpression: op.condition ?? '',
+                            ExpressionAttributeValues: op.conditionValues,
+                        },
+                    };
+                default:
+                    throw new Error(`Unknown transaction type: ${(op as { type: string }).type}`);
+            }
+        });
+
+        const command = new TransactWriteCommand({
+            TransactItems: transactItems,
         });
         await docClient.send(command);
     },

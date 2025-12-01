@@ -166,6 +166,66 @@ Resources:
             Path: /protected/example
             Method: get
 
+  # GET /user/inventory/{userId}
+  GetUserInventoryFunction:
+    Type: AWS::Serverless::Function
+    Description: Retrieves a user's inventory
+    Timeout: 3
+    MemorySize: 128
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/getUserInventory.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/getUserInventory.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
+
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /user/inventory/{userId}
+            Method: get
+
+  # POST /user/inventory/modify [AUTH REQUIRED]
+  ModifyUserInventoryFunction:
+    Type: AWS::Serverless::Function
+    Description: Modifies a user's inventory
+    Timeout: 5
+    MemorySize: 256
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/modifyUserInventory.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/modifyUserInventory.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
+      Environment:
+        Variables:
+          AUTH_TOKEN: !Ref AuthToken
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /user/inventory/modify
+            Method: post
+
   # ANY /{proxy+}
   NotFoundFunction:
     Type: AWS::Serverless::Function
