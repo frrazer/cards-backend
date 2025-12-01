@@ -1,6 +1,5 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
 import { buildResponse } from '../utils/response';
-import { checkAuth, getUnauthorizedResponse } from '../utils/auth';
 
 /**
  * @route GET /protected/example
@@ -9,13 +8,7 @@ import { checkAuth, getUnauthorizedResponse } from '../utils/auth';
  * @memory 128
  * @description Example protected endpoint that requires authentication
  */
-export const handler: APIGatewayProxyHandler = async (event) => {
-    // Check authentication
-    if (!checkAuth(event)) {
-        console.log('Authentication failed for protected endpoint');
-        return getUnauthorizedResponse();
-    }
-
+export const handler: APIGatewayProxyHandler = async () => {
     console.log('Processing authenticated request...');
 
     return buildResponse(200, {

@@ -1,6 +1,5 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
 import { buildResponse } from '../utils/response';
-import { checkAuth, getUnauthorizedResponse } from '../utils/auth';
 import { db } from '../utils/db';
 import { ModifyInventoryRequest, UserInventory, InventoryCard } from '../types/inventory';
 
@@ -12,11 +11,6 @@ import { ModifyInventoryRequest, UserInventory, InventoryCard } from '../types/i
  * @description Modifies a user's inventory
  */
 export const handler: APIGatewayProxyHandler = async (event) => {
-    if (!checkAuth(event)) {
-        console.log('Authentication failed for modifyUserInventory');
-        return getUnauthorizedResponse();
-    }
-
     if (!event.body) {
         return buildResponse(400, {
             success: false,
@@ -124,8 +118,8 @@ export const handler: APIGatewayProxyHandler = async (event) => {
                                 message: 'addPack requires packName',
                             });
                         }
-                        const quantity = operation.quantity || 1;
-                        inventory.packs[operation.packName] = (inventory.packs[operation.packName] || 0) + quantity;
+                        inventory.packs[operation.packName] =
+                            (inventory.packs[operation.packName] || 0) + (operation.quantity || 1);
                         break;
                     }
 
@@ -165,20 +159,23 @@ export const handler: APIGatewayProxyHandler = async (event) => {
 
             const newVersion = currentVersion + 1;
             inventory.version = newVersion;
-            const result = await db.conditionalPut(
-                {
-                    pk,
-                    sk,
-                    userId: inventory.userId,
-                    packs: inventory.packs,
-                    cards: inventory.cards,
-                    version: newVersion,
-                    updatedAt: new Date().toISOString(),
-                },
-                currentVersion === 0 ? undefined : currentVersion,
-            );
 
-            if (result.success) {
+            if (
+                (
+                    await db.conditionalPut(
+                        {
+                            pk,
+                            sk,
+                            userId: inventory.userId,
+                            packs: inventory.packs,
+                            cards: inventory.cards,
+                            version: newVersion,
+                            updatedAt: new Date().toISOString(),
+                        },
+                        currentVersion === 0 ? undefined : currentVersion,
+                    )
+                ).success
+            ) {
                 return buildResponse(200, {
                     success: true,
                     message: 'Inventory updated successfully',

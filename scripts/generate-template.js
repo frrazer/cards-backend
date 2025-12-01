@@ -46,10 +46,12 @@ const generateTemplate = (handlers) => {
                 .filter(Boolean)
                 .join('\n');
 
-            const envVars = h.requiresAuth
-                ? `      Environment:
-        Variables:
-          AUTH_TOKEN: !Ref AuthToken`
+            // No need for AUTH_TOKEN in individual functions anymore
+            // The authorizer handles it
+
+            const authConfig = h.requiresAuth
+                ? `            Auth:
+              Authorizer: ApiAuthorizer`
                 : '';
 
             return `  # ${h.method} ${h.path}${h.requiresAuth ? ' [AUTH REQUIRED]' : ''}
@@ -70,14 +72,14 @@ ${props}
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MainTable
-${envVars}
       Events:
         ApiEvent:
           Type: Api
           Properties:
             RestApiId: !Ref MyApi
             Path: ${h.path}
-            Method: ${h.method.toLowerCase()}`;
+            Method: ${h.method.toLowerCase()}
+${authConfig}`;
         })
         .join('\n\n');
 
@@ -92,10 +94,9 @@ ${envVars}
                 .filter(Boolean)
                 .join('\n');
 
-            const envVars = h.requiresAuth
-                ? `      Environment:
-        Variables:
-          AUTH_TOKEN: !Ref AuthToken`
+            const authConfig = h.requiresAuth
+                ? `            Auth:
+              Authorizer: ApiAuthorizer`
                 : '';
 
             return `  # ${h.method} ${h.path}${h.requiresAuth ? ' [AUTH REQUIRED]' : ''}
@@ -116,14 +117,14 @@ ${props}
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MainTable
-${envVars}
       Events:
         ApiEvent:
           Type: Api
           Properties:
             RestApiId: !Ref MyApi
             Path: ${h.path}
-            Method: ${h.method.toLowerCase()}`;
+            Method: ${h.method.toLowerCase()}
+${authConfig}`;
         })
         .join('\n\n');
 
@@ -231,10 +232,39 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       StageName: !Ref Env
+      Auth:
+        Authorizers:
+          ApiAuthorizer:
+            FunctionArn: !GetAtt AuthorizerFunction.Arn
+            FunctionPayloadType: REQUEST
+            Identity:
+              Headers:
+                - Authorization
+              ReauthorizeEvery: 300
       Cors:
         AllowMethods: "'GET,POST,PUT,DELETE,PATCH,OPTIONS'"
         AllowHeaders: !Sub "'Content-Type,Authorization,\${WafHeaderName}'"
         AllowOrigin: "'*'"
+  
+  # Lambda Authorizer Function
+  AuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/authorizer.handler
+      Runtime: nodejs20.x
+      Architectures: [arm64]
+      Environment:
+        Variables:
+          AUTH_TOKEN: !Ref AuthToken
+      Metadata:
+        BuildMethod: esbuild
+        BuildProperties:
+          Minify: true
+          Target: "es2020"
+          Sourcemap: true
+          EntryPoints:
+            - src/handlers/authorizer.ts
 
   MainTable:
     Type: AWS::DynamoDB::Table

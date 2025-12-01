@@ -78,10 +78,39 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       StageName: !Ref Env
+      Auth:
+        Authorizers:
+          ApiAuthorizer:
+            FunctionArn: !GetAtt AuthorizerFunction.Arn
+            FunctionPayloadType: REQUEST
+            Identity:
+              Headers:
+                - Authorization
+              ReauthorizeEvery: 300
       Cors:
         AllowMethods: "'GET,POST,PUT,DELETE,PATCH,OPTIONS'"
         AllowHeaders: !Sub "'Content-Type,Authorization,${WafHeaderName}'"
         AllowOrigin: "'*'"
+  
+  # Lambda Authorizer Function
+  AuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/authorizer.handler
+      Runtime: nodejs20.x
+      Architectures: [arm64]
+      Environment:
+        Variables:
+          AUTH_TOKEN: !Ref AuthToken
+      Metadata:
+        BuildMethod: esbuild
+        BuildProperties:
+          Minify: true
+          Target: "es2020"
+          Sourcemap: true
+          EntryPoints:
+            - src/handlers/authorizer.ts
 
   MainTable:
     Type: AWS::DynamoDB::Table
@@ -126,7 +155,6 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MainTable
-
       Events:
         ApiEvent:
           Type: Api
@@ -134,6 +162,7 @@ Resources:
             RestApiId: !Ref MyApi
             Path: /heartbeat
             Method: get
+
 
   # GET /protected/example [AUTH REQUIRED]
   GetProtectedExampleFunction:
@@ -155,9 +184,6 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MainTable
-      Environment:
-        Variables:
-          AUTH_TOKEN: !Ref AuthToken
       Events:
         ApiEvent:
           Type: Api
@@ -165,6 +191,8 @@ Resources:
             RestApiId: !Ref MyApi
             Path: /protected/example
             Method: get
+            Auth:
+              Authorizer: ApiAuthorizer
 
   # GET /user/inventory/{userId}
   GetUserInventoryFunction:
@@ -186,7 +214,6 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MainTable
-
       Events:
         ApiEvent:
           Type: Api
@@ -194,6 +221,7 @@ Resources:
             RestApiId: !Ref MyApi
             Path: /user/inventory/{userId}
             Method: get
+
 
   # POST /user/inventory/modify [AUTH REQUIRED]
   ModifyUserInventoryFunction:
@@ -215,9 +243,6 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MainTable
-      Environment:
-        Variables:
-          AUTH_TOKEN: !Ref AuthToken
       Events:
         ApiEvent:
           Type: Api
@@ -225,6 +250,8 @@ Resources:
             RestApiId: !Ref MyApi
             Path: /user/inventory/modify
             Method: post
+            Auth:
+              Authorizer: ApiAuthorizer
 
   # ANY /{proxy+}
   NotFoundFunction:
@@ -246,7 +273,6 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MainTable
-
       Events:
         ApiEvent:
           Type: Api
@@ -254,6 +280,7 @@ Resources:
             RestApiId: !Ref MyApi
             Path: /{proxy+}
             Method: any
+
 
 Outputs:
   ApiEndpoint:

@@ -21,20 +21,23 @@ if (!TABLE_NAME) {
 
 export const db = {
     get: async (pk: string, sk: string) => {
-        const command = new GetCommand({
-            TableName: TABLE_NAME,
-            Key: { pk, sk },
-        });
-        const response = await docClient.send(command);
-        return response.Item;
+        return (
+            await docClient.send(
+                new GetCommand({
+                    TableName: TABLE_NAME,
+                    Key: { pk, sk },
+                }),
+            )
+        ).Item;
     },
 
     put: async (item: Record<string, unknown>) => {
-        const command = new PutCommand({
-            TableName: TABLE_NAME,
-            Item: item,
-        });
-        await docClient.send(command);
+        await docClient.send(
+            new PutCommand({
+                TableName: TABLE_NAME,
+                Item: item,
+            }),
+        );
         return item;
     },
 
@@ -56,43 +59,46 @@ export const db = {
             expressionAttributeValues[attrValue] = updates[key];
         });
 
-        const command = new UpdateCommand({
-            TableName: TABLE_NAME,
-            Key: { pk, sk },
-            UpdateExpression: `SET ${updateExpressions.join(', ')}`,
-            ExpressionAttributeNames: expressionAttributeNames,
-            ExpressionAttributeValues: expressionAttributeValues,
-            ReturnValues: 'ALL_NEW',
-        });
-
-        const response = await docClient.send(command);
-        return response.Attributes;
+        return (
+            await docClient.send(
+                new UpdateCommand({
+                    TableName: TABLE_NAME,
+                    Key: { pk, sk },
+                    UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+                    ExpressionAttributeNames: expressionAttributeNames,
+                    ExpressionAttributeValues: expressionAttributeValues,
+                    ReturnValues: 'ALL_NEW',
+                }),
+            )
+        ).Attributes;
     },
 
     increment: async (pk: string, sk: string, field: string, amount = 1) => {
-        const command = new UpdateCommand({
-            TableName: TABLE_NAME,
-            Key: { pk, sk },
-            UpdateExpression: `ADD #field :amount`,
-            ExpressionAttributeNames: {
-                '#field': field,
-            },
-            ExpressionAttributeValues: {
-                ':amount': amount,
-            },
-            ReturnValues: 'ALL_NEW',
-        });
-
-        const response = await docClient.send(command);
-        return response.Attributes;
+        return (
+            await docClient.send(
+                new UpdateCommand({
+                    TableName: TABLE_NAME,
+                    Key: { pk, sk },
+                    UpdateExpression: `ADD #field :amount`,
+                    ExpressionAttributeNames: {
+                        '#field': field,
+                    },
+                    ExpressionAttributeValues: {
+                        ':amount': amount,
+                    },
+                    ReturnValues: 'ALL_NEW',
+                }),
+            )
+        ).Attributes;
     },
 
     delete: async (pk: string, sk: string) => {
-        const command = new DeleteCommand({
-            TableName: TABLE_NAME,
-            Key: { pk, sk },
-        });
-        await docClient.send(command);
+        await docClient.send(
+            new DeleteCommand({
+                TableName: TABLE_NAME,
+                Key: { pk, sk },
+            }),
+        );
     },
 
     query: async (
@@ -133,15 +139,16 @@ export const db = {
             expressionAttributeValues[':skValue'] = options.skLessThanOrEqual;
         }
 
-        const command = new QueryCommand({
-            TableName: TABLE_NAME,
-            KeyConditionExpression: keyConditionExpression,
-            ExpressionAttributeValues: expressionAttributeValues,
-            Limit: options?.limit,
-            ScanIndexForward: options?.scanIndexForward ?? true,
-            ExclusiveStartKey: options?.exclusiveStartKey,
-        });
-        const response = await docClient.send(command);
+        const response = await docClient.send(
+            new QueryCommand({
+                TableName: TABLE_NAME,
+                KeyConditionExpression: keyConditionExpression,
+                ExpressionAttributeValues: expressionAttributeValues,
+                Limit: options?.limit,
+                ScanIndexForward: options?.scanIndexForward ?? true,
+                ExclusiveStartKey: options?.exclusiveStartKey,
+            }),
+        );
         return {
             items: response.Items || [],
             lastEvaluatedKey: response.LastEvaluatedKey,
@@ -154,15 +161,19 @@ export const db = {
             throw new Error('BatchGet supports maximum 100 items. Use multiple calls or implement chunking.');
         }
 
-        const command = new BatchGetCommand({
-            RequestItems: {
-                [TABLE_NAME]: {
-                    Keys: keys,
-                },
-            },
-        });
-        const response = await docClient.send(command);
-        return response.Responses?.[TABLE_NAME] || [];
+        return (
+            (
+                await docClient.send(
+                    new BatchGetCommand({
+                        RequestItems: {
+                            [TABLE_NAME]: {
+                                Keys: keys,
+                            },
+                        },
+                    }),
+                )
+            ).Responses?.[TABLE_NAME] || []
+        );
     },
 
     batchPut: async (items: Array<Record<string, unknown>>) => {
@@ -189,14 +200,15 @@ export const db = {
             return;
         }
 
-        const command = new BatchWriteCommand({
-            RequestItems: {
-                [TABLE_NAME]: items.map((item) => ({
-                    PutRequest: { Item: item },
-                })),
-            },
-        });
-        await docClient.send(command);
+        await docClient.send(
+            new BatchWriteCommand({
+                RequestItems: {
+                    [TABLE_NAME]: items.map((item) => ({
+                        PutRequest: { Item: item },
+                    })),
+                },
+            }),
+        );
     },
 
     batchDelete: async (keys: Array<{ pk: string; sk: string }>) => {
@@ -223,14 +235,15 @@ export const db = {
             return;
         }
 
-        const command = new BatchWriteCommand({
-            RequestItems: {
-                [TABLE_NAME]: keys.map((key) => ({
-                    DeleteRequest: { Key: key },
-                })),
-            },
-        });
-        await docClient.send(command);
+        await docClient.send(
+            new BatchWriteCommand({
+                RequestItems: {
+                    [TABLE_NAME]: keys.map((key) => ({
+                        DeleteRequest: { Key: key },
+                    })),
+                },
+            }),
+        );
     },
 
     conditionalPut: async (
@@ -238,16 +251,17 @@ export const db = {
         expectedVersion?: number,
     ): Promise<{ success: boolean; error?: string }> => {
         try {
-            const command = new PutCommand({
-                TableName: TABLE_NAME,
-                Item: item,
-                ConditionExpression:
-                    expectedVersion !== undefined ? '#version = :expectedVersion' : 'attribute_not_exists(pk)',
-                ExpressionAttributeNames: expectedVersion !== undefined ? { '#version': 'version' } : undefined,
-                ExpressionAttributeValues:
-                    expectedVersion !== undefined ? { ':expectedVersion': expectedVersion } : undefined,
-            });
-            await docClient.send(command);
+            await docClient.send(
+                new PutCommand({
+                    TableName: TABLE_NAME,
+                    Item: item,
+                    ConditionExpression:
+                        expectedVersion !== undefined ? '#version = :expectedVersion' : 'attribute_not_exists(pk)',
+                    ExpressionAttributeNames: expectedVersion !== undefined ? { '#version': 'version' } : undefined,
+                    ExpressionAttributeValues:
+                        expectedVersion !== undefined ? { ':expectedVersion': expectedVersion } : undefined,
+                }),
+            );
             return { success: true };
         } catch (error: unknown) {
             if (error instanceof Error && 'name' in error && error.name === 'ConditionalCheckFailedException') {
@@ -328,9 +342,10 @@ export const db = {
             }
         });
 
-        const command = new TransactWriteCommand({
-            TransactItems: transactItems,
-        });
-        await docClient.send(command);
+        await docClient.send(
+            new TransactWriteCommand({
+                TransactItems: transactItems,
+            }),
+        );
     },
 };
