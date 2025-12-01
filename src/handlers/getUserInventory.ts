@@ -9,46 +9,47 @@ import { InventoryCard } from '../types/inventory';
  * @memory 128
  * @description Retrieves a user's inventory
  */
-export const handler: APIGatewayProxyHandler = async (event) => {
-    const userId = event.pathParameters?.userId;
+export const handler: APIGatewayProxyHandler = async event => {
+  const userId = event.pathParameters?.userId;
 
-    if (!userId) {
-        return buildResponse(400, {
-            success: false,
-            error: 'Bad Request',
-            message: 'userId is required in path parameters',
-        });
+  if (!userId) {
+    return buildResponse(400, {
+      success: false,
+      error: 'Bad Request',
+      message: 'userId is required in path parameters',
+    });
+  }
+
+  try {
+    const item = await db.get(`USER#${userId}`, 'INVENTORY');
+
+    if (!item) {
+      return buildResponse(200, {
+        success: true,
+        data: {
+          userId,
+          packs: {},
+          cards: [],
+          version: 0,
+        },
+      });
     }
 
-    try {
-        const item = await db.get(`USER#${userId}`, 'INVENTORY');
-
-        if (!item) {
-            return buildResponse(200, {
-                success: true,
-                data: {
-                    userId,
-                    packs: {},
-                    cards: [],
-                },
-            });
-        }
-
-        return buildResponse(200, {
-            success: true,
-            data: {
-                userId: item.userId as string,
-                packs: (item.packs as Record<string, number>) || {},
-                cards: (item.cards as Array<InventoryCard>) || [],
-                version: (item.version as number) || 0,
-            },
-        });
-    } catch (error) {
-        console.error('Error fetching user inventory:', error);
-        return buildResponse(500, {
-            success: false,
-            error: 'Internal Server Error',
-            message: 'Failed to fetch user inventory',
-        });
-    }
+    return buildResponse(200, {
+      success: true,
+      data: {
+        userId: item.userId as string,
+        packs: (item.packs as Record<string, number>) || {},
+        cards: (item.cards as Array<InventoryCard>) || [],
+        version: (item.version as number) || 0,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching user inventory:', error);
+    return buildResponse(500, {
+      success: false,
+      error: 'Internal Server Error',
+      message: 'Failed to fetch user inventory',
+    });
+  }
 };

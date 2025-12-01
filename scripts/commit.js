@@ -17,6 +17,7 @@ const commitMessage = args.slice(1).join(' ');
 
 const commands = [
     { cmd: 'npm run generate:template', description: 'Generating template...' },
+    { cmd: 'npx prettier --write "src/**/*.{ts,js,json}"', description: 'Formatting with Prettier...' },
     { cmd: 'npx eslint . --fix', description: 'Running ESLint...' },
     { cmd: 'git add .', description: 'Staging changes...' },
     { cmd: `git commit -m "${commitMessage}"`, description: 'Committing changes...' },

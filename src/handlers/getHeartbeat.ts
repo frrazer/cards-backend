@@ -9,12 +9,12 @@ import { db } from '../utils/db';
  * @description Health check endpoint for API monitoring
  */
 export const handler: APIGatewayProxyHandler = async () => {
-    console.log('Processing heartbeat request...');
+  console.log('Processing heartbeat request...');
 
-    return buildResponse(200, {
-        success: true,
-        message: 'API is running',
-        timestamp: new Date().toISOString(),
-        totalRequests: (await db.increment('METRICS', 'HEARTBEAT', 'requestCount', 1))?.requestCount || 0,
-    });
+  return buildResponse(200, {
+    success: true,
+    message: 'API is running',
+    timestamp: new Date().toISOString(),
+    totalRequests: (await db.increment('METRICS', 'HEARTBEAT', 'requestCount', 1))?.requestCount || 0,
+  });
 };

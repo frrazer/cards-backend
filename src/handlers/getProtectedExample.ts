@@ -9,11 +9,11 @@ import { buildResponse } from '../utils/response';
  * @description Example protected endpoint that requires authentication
  */
 export const handler: APIGatewayProxyHandler = async () => {
-    console.log('Processing authenticated request...');
+  console.log('Processing authenticated request...');
 
-    return buildResponse(200, {
-        success: true,
-        message: 'You have successfully accessed a protected endpoint!',
-        timestamp: new Date().toISOString(),
-    });
+  return buildResponse(200, {
+    success: true,
+    message: 'You have successfully accessed a protected endpoint!',
+    timestamp: new Date().toISOString(),
+  });
 };

@@ -1,0 +1,55 @@
+---
+alwaysApply: true
+---
+
+# Code Style and Conciseness
+
+## General Principles
+
+- Keep code condensed and minimal while maintaining readability
+- Use clear, descriptive variable names that convey purpose
+- Avoid unnecessary verbosity or redundant code
+
+## Variable Usage
+
+- Only create variables if they are used **more than twice**
+- For single-use values, inline them directly where needed
+- For values used exactly twice, evaluate if extraction improves readability
+
+### Examples
+
+```typescript
+// ❌ Bad - variable used only once
+const userName = user.name;
+console.log(userName);
+
+// ✅ Good - inline single-use values
+console.log(user.name);
+
+// ❌ Bad - variable used twice but doesn't improve clarity
+const isValid = value > 0;
+if (isValid) return isValid;
+
+// ✅ Good - inline when clarity is maintained
+if (value > 0) return value > 0;
+
+// ✅ Good - variable used multiple times
+const sanitizedInput = input.trim().toLowerCase();
+if (sanitizedInput.length === 0) return;
+processInput(sanitizedInput);
+logInput(sanitizedInput);
+```
+
+## File Management
+
+- **Do not create summary files** or unnecessary documentation files
+- Avoid creating helper files unless absolutely necessary
+- Keep related functionality together rather than over-abstracting
+
+## Readability Guidelines
+
+While being concise:
+- Use meaningful names for functions, variables, and types
+- Keep function names descriptive and purposeful
+- Maintain proper code formatting and structure
+- Add comments only when the code's intent isn't immediately clear
