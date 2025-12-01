@@ -43,7 +43,7 @@ jobs:
               run: |
                   sam deploy \
                     --stack-name cards-api-dev \
-                    --parameter-overrides Env=dev \
+                    --parameter-overrides Env=dev AuthToken=${{ secrets.AUTH_TOKEN_DEV }} \
                     --capabilities CAPABILITY_IAM \
                     --resolve-s3 \
                     --no-confirm-changeset \
@@ -54,7 +54,7 @@ jobs:
               run: |
                   sam deploy \
                     --stack-name cards-api-prod \
-                    --parameter-overrides Env=prod \
+                    --parameter-overrides Env=prod AuthToken=${{ secrets.AUTH_TOKEN_PROD }} \
                     --capabilities CAPABILITY_IAM \
                     --resolve-s3 \
                     --no-confirm-changeset \

@@ -4,6 +4,7 @@ Description: Scalable TypeScript Backend API - Cards API
 
 Parameters:
   Env: { Type: String, Default: dev, AllowedValues: [dev, prod], Description: Environment name }
+  AuthToken: { Type: String, NoEcho: true, Description: API authentication token for protected endpoints }
 
 Globals:
   Function:
@@ -66,12 +67,44 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MainTable
+
       Events:
         ApiEvent:
           Type: Api
           Properties:
             RestApiId: !Ref MyApi
             Path: /heartbeat
+            Method: get
+
+  # GET /protected/example [AUTH REQUIRED]
+  GetProtectedExampleFunction:
+    Type: AWS::Serverless::Function
+    Description: Example protected endpoint that requires authentication
+    Timeout: 3
+    MemorySize: 128
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/getProtectedExample.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/getProtectedExample.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
+      Environment:
+        Variables:
+          AUTH_TOKEN: !Ref AuthToken
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /protected/example
             Method: get
 
   # ANY /{proxy+}
@@ -94,6 +127,7 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MainTable
+
       Events:
         ApiEvent:
           Type: Api

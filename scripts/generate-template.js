@@ -23,6 +23,7 @@ const parseHandler = (filePath) => {
         timeout: docBlock.match(/@timeout\s+(\d+)/)?.[1],
         memory: docBlock.match(/@memory\s+(\d+)/)?.[1],
         description: docBlock.match(/@description\s+(.+)/)?.[1]?.trim(),
+        requiresAuth: /@auth/i.test(docBlock),
         isCatchAll: routeMatch[2] === '/{proxy+}',
     };
 };
@@ -45,7 +46,13 @@ const generateTemplate = (handlers) => {
                 .filter(Boolean)
                 .join('\n');
 
-            return `  # ${h.method} ${h.path}
+            const envVars = h.requiresAuth
+                ? `      Environment:
+        Variables:
+          AUTH_TOKEN: !Ref AuthToken`
+                : '';
+
+            return `  # ${h.method} ${h.path}${h.requiresAuth ? ' [AUTH REQUIRED]' : ''}
   ${getFuncName(h.fileName)}:
     Type: AWS::Serverless::Function
 ${props}
@@ -63,6 +70,7 @@ ${props}
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MainTable
+${envVars}
       Events:
         ApiEvent:
           Type: Api
@@ -84,7 +92,13 @@ ${props}
                 .filter(Boolean)
                 .join('\n');
 
-            return `  # ${h.method} ${h.path}
+            const envVars = h.requiresAuth
+                ? `      Environment:
+        Variables:
+          AUTH_TOKEN: !Ref AuthToken`
+                : '';
+
+            return `  # ${h.method} ${h.path}${h.requiresAuth ? ' [AUTH REQUIRED]' : ''}
   ${getFuncName(h.fileName)}:
     Type: AWS::Serverless::Function
 ${props}
@@ -102,6 +116,7 @@ ${props}
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MainTable
+${envVars}
       Events:
         ApiEvent:
           Type: Api
@@ -142,6 +157,7 @@ Description: Scalable TypeScript Backend API - Cards API
 
 Parameters:
   Env: { Type: String, Default: dev, AllowedValues: [dev, prod], Description: Environment name }
+  AuthToken: { Type: String, NoEcho: true, Description: API authentication token for protected endpoints }
 
 Globals:
   Function:
