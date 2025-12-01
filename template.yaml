@@ -78,9 +78,10 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       StageName: !Ref Env
-      Cors: !Sub 
-        - "{ AllowMethods: "'GET,POST,PUT,DELETE,PATCH,OPTIONS'", AllowHeaders: "'Content-Type,Authorization,${HeaderName}'", AllowOrigin: "'*'" }"
-        - HeaderName: !Ref WafHeaderName
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,PATCH,OPTIONS'"
+        AllowHeaders: !Sub "'Content-Type,Authorization,${WafHeaderName}'"
+        AllowOrigin: "'*'"
 
   MainTable:
     Type: AWS::DynamoDB::Table
