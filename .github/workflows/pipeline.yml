@@ -43,7 +43,7 @@ jobs:
               run: |
                   sam deploy \
                     --stack-name cards-api-dev \
-                    --parameter-overrides Env=dev AuthToken=${{ secrets.AUTH_TOKEN_DEV }} \
+                    --parameter-overrides Env=dev AuthToken=${{ secrets.AUTH_TOKEN_DEV }} WafHeaderName=${{ secrets.WAF_HEADER_NAME }} WafHeaderValue=${{ secrets.WAF_HEADER_VALUE }} \
                     --capabilities CAPABILITY_IAM \
                     --resolve-s3 \
                     --no-confirm-changeset \
@@ -54,7 +54,7 @@ jobs:
               run: |
                   sam deploy \
                     --stack-name cards-api-prod \
-                    --parameter-overrides Env=prod AuthToken=${{ secrets.AUTH_TOKEN_PROD }} \
+                    --parameter-overrides Env=prod AuthToken=${{ secrets.AUTH_TOKEN_PROD }} WafHeaderName=${{ secrets.WAF_HEADER_NAME }} WafHeaderValue=${{ secrets.WAF_HEADER_VALUE }} \
                     --capabilities CAPABILITY_IAM \
                     --resolve-s3 \
                     --no-confirm-changeset \
