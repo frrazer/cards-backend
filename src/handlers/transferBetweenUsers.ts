@@ -164,7 +164,7 @@ export const handler: APIGatewayProxyHandler = async event => {
 
       for (const [userId, inventory] of inventories) {
         inventory.version++;
-        inventory.totalYps = inventory.cards.reduce((sum, card) => sum + card.yps, 0);
+        inventory.totalYps = inventory.cards.filter(card => card.placed).reduce((sum, card) => sum + card.yps, 0);
 
         if (inventory.exists) {
           operations.push({

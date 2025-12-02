@@ -4,6 +4,7 @@ export interface InventoryCard {
   level: number;
   variant: string;
   yps: number;
+  placed: boolean;
 }
 
 export interface UserInventory {

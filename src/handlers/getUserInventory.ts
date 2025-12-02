@@ -37,7 +37,7 @@ export const handler: APIGatewayProxyHandler = async event => {
     }
 
     const cards = (item.cards as Array<InventoryCard>) || [];
-    const totalYps = cards.reduce((sum, card) => sum + (card.yps || 0), 0);
+    const totalYps = cards.filter(card => card.placed).reduce((sum, card) => sum + (card.yps || 0), 0);
 
     return buildResponse(200, {
       success: true,

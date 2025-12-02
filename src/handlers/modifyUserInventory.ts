@@ -95,6 +95,13 @@ export const handler: APIGatewayProxyHandler = async event => {
                 message: 'addCard requires card with yps (yenPerSecond) field',
               });
             }
+            if (typeof operation.card.placed !== 'boolean') {
+              return buildResponse(400, {
+                success: false,
+                error: 'Bad Request',
+                message: 'addCard requires card with placed (boolean) field',
+              });
+            }
             inventory.cards.push(operation.card);
             break;
           }
@@ -168,7 +175,7 @@ export const handler: APIGatewayProxyHandler = async event => {
 
       const newVersion = currentVersion + 1;
       inventory.version = newVersion;
-      inventory.totalYps = inventory.cards.reduce((sum, card) => sum + card.yps, 0);
+      inventory.totalYps = inventory.cards.filter(card => card.placed).reduce((sum, card) => sum + card.yps, 0);
 
       if (
         (
