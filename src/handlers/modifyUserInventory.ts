@@ -63,7 +63,6 @@ export const handler: APIGatewayProxyHandler = async event => {
           userId,
           packs: {},
           cards: [],
-          totalYps: 0,
           version: 0,
         };
         currentVersion = 0;
@@ -72,7 +71,6 @@ export const handler: APIGatewayProxyHandler = async event => {
           userId: item.userId as string,
           packs: (item.packs as Record<string, number>) || {},
           cards: (item.cards as InventoryCard[]) || [],
-          totalYps: (item.totalYps as number) || 0,
           version: (item.version as number) || 0,
         };
         currentVersion = inventory.version || 0;
@@ -88,17 +86,7 @@ export const handler: APIGatewayProxyHandler = async event => {
                 message: 'addCard requires card with cardId and cardName',
               });
             }
-            if (typeof operation.card.yps !== 'number') {
-              return buildResponse(400, {
-                success: false,
-                error: 'Bad Request',
-                message: 'addCard requires card with yps (yenPerSecond) field',
-              });
-            }
-            inventory.cards.push({
-              ...operation.card,
-              placed: operation.card.placed ?? false,
-            });
+            inventory.cards.push(operation.card);
             break;
           }
 
@@ -132,33 +120,6 @@ export const handler: APIGatewayProxyHandler = async event => {
             }
             inventory.packs[operation.packName] =
               (inventory.packs[operation.packName] || 0) + (operation.quantity || 1);
-            break;
-          }
-
-          case 'updateCardPlaced': {
-            if (!operation.cardId) {
-              return buildResponse(400, {
-                success: false,
-                error: 'Bad Request',
-                message: 'updateCardPlaced requires cardId',
-              });
-            }
-            if (typeof operation.placed !== 'boolean') {
-              return buildResponse(400, {
-                success: false,
-                error: 'Bad Request',
-                message: 'updateCardPlaced requires placed (boolean)',
-              });
-            }
-            const card = inventory.cards.find(c => c.cardId === operation.cardId);
-            if (!card) {
-              return buildResponse(404, {
-                success: false,
-                error: 'Not Found',
-                message: `Card with id ${operation.cardId} not found in inventory`,
-              });
-            }
-            card.placed = operation.placed;
             break;
           }
 
@@ -198,7 +159,6 @@ export const handler: APIGatewayProxyHandler = async event => {
 
       const newVersion = currentVersion + 1;
       inventory.version = newVersion;
-      inventory.totalYps = inventory.cards.filter(card => card.placed).reduce((sum, card) => sum + card.yps, 0);
 
       if (
         (
@@ -209,7 +169,6 @@ export const handler: APIGatewayProxyHandler = async event => {
               userId: inventory.userId,
               packs: inventory.packs,
               cards: inventory.cards,
-              totalYps: inventory.totalYps,
               version: newVersion,
               updatedAt: new Date().toISOString(),
             },

@@ -92,7 +92,6 @@ export const handler: APIGatewayProxyHandler = async event => {
                 userId: items[index].userId as string,
                 packs: (items[index].packs as Record<string, number>) || {},
                 cards: (items[index].cards as InventoryCard[]) || [],
-                totalYps: (items[index].totalYps as number) || 0,
                 version: (items[index].version as number) || 0,
                 exists: true,
               }
@@ -100,7 +99,6 @@ export const handler: APIGatewayProxyHandler = async event => {
                 userId,
                 packs: {},
                 cards: [],
-                totalYps: 0,
                 version: 0,
                 exists: false,
               },
@@ -164,7 +162,6 @@ export const handler: APIGatewayProxyHandler = async event => {
 
       for (const [userId, inventory] of inventories) {
         inventory.version++;
-        inventory.totalYps = inventory.cards.filter(card => card.placed).reduce((sum, card) => sum + card.yps, 0);
 
         if (inventory.exists) {
           operations.push({
@@ -174,7 +171,6 @@ export const handler: APIGatewayProxyHandler = async event => {
             updates: {
               cards: inventory.cards,
               packs: inventory.packs,
-              totalYps: inventory.totalYps,
               version: inventory.version,
               updatedAt: new Date().toISOString(),
             },
@@ -195,7 +191,6 @@ export const handler: APIGatewayProxyHandler = async event => {
               userId,
               cards: inventory.cards,
               packs: inventory.packs,
-              totalYps: inventory.totalYps,
               version: inventory.version,
               updatedAt: new Date().toISOString(),
             },
@@ -210,10 +205,7 @@ export const handler: APIGatewayProxyHandler = async event => {
         success: true,
         message: 'Trade completed successfully',
         data: Object.fromEntries(
-          Array.from(inventories.entries()).map(([userId, inv]) => [
-            userId,
-            { cards: inv.cards, packs: inv.packs, totalYps: inv.totalYps },
-          ]),
+          Array.from(inventories.entries()).map(([userId, inv]) => [userId, { cards: inv.cards, packs: inv.packs }]),
         ),
       });
     } catch (error: unknown) {
