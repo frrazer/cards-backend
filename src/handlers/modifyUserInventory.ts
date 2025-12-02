@@ -139,6 +139,33 @@ export const handler: APIGatewayProxyHandler = async event => {
             break;
           }
 
+          case 'updateCardPlaced': {
+            if (!operation.cardId) {
+              return buildResponse(400, {
+                success: false,
+                error: 'Bad Request',
+                message: 'updateCardPlaced requires cardId',
+              });
+            }
+            if (typeof operation.placed !== 'boolean') {
+              return buildResponse(400, {
+                success: false,
+                error: 'Bad Request',
+                message: 'updateCardPlaced requires placed (boolean)',
+              });
+            }
+            const card = inventory.cards.find(c => c.cardId === operation.cardId);
+            if (!card) {
+              return buildResponse(404, {
+                success: false,
+                error: 'Not Found',
+                message: `Card with id ${operation.cardId} not found in inventory`,
+              });
+            }
+            card.placed = operation.placed;
+            break;
+          }
+
           case 'removePack': {
             if (!operation.packName) {
               return buildResponse(400, {
