@@ -3,11 +3,15 @@ import { buildResponse } from '../utils/response';
 import { db } from '../utils/db';
 import { InventoryCard } from '../types/inventory';
 
-interface TransferRequest {
+interface Transfer {
   fromUserId: string;
   toUserId: string;
   cards?: Array<{ cardId: string }>;
   packs?: Array<{ packName: string; quantity: number }>;
+}
+
+interface TradeRequest {
+  transfers: Transfer[];
 }
 
 /**
@@ -15,7 +19,7 @@ interface TransferRequest {
  * @auth
  * @timeout 10
  * @memory 256
- * @description Atomically transfer cards/packs between users
+ * @description Atomically execute multi-way trades between users
  */
 export const handler: APIGatewayProxyHandler = async event => {
   if (!event.body) {
@@ -26,9 +30,9 @@ export const handler: APIGatewayProxyHandler = async event => {
     });
   }
 
-  let request: TransferRequest;
+  let request: TradeRequest;
   try {
-    request = JSON.parse(event.body) as TransferRequest;
+    request = JSON.parse(event.body) as TradeRequest;
   } catch {
     return buildResponse(400, {
       success: false,
@@ -37,177 +41,172 @@ export const handler: APIGatewayProxyHandler = async event => {
     });
   }
 
-  const { fromUserId, toUserId, cards, packs } = request;
+  const { transfers } = request;
 
-  if (!fromUserId || !toUserId) {
+  if (!transfers?.length) {
     return buildResponse(400, {
       success: false,
       error: 'Bad Request',
-      message: 'fromUserId and toUserId are required',
+      message: 'At least one transfer is required',
     });
   }
 
-  if (fromUserId === toUserId) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Cannot transfer to self',
-    });
+  for (const transfer of transfers) {
+    if (!transfer.fromUserId || !transfer.toUserId) {
+      return buildResponse(400, {
+        success: false,
+        error: 'Bad Request',
+        message: 'Each transfer requires fromUserId and toUserId',
+      });
+    }
+
+    if (transfer.fromUserId === transfer.toUserId) {
+      return buildResponse(400, {
+        success: false,
+        error: 'Bad Request',
+        message: 'Cannot transfer to self',
+      });
+    }
+
+    if (!transfer.cards?.length && !transfer.packs?.length) {
+      return buildResponse(400, {
+        success: false,
+        error: 'Bad Request',
+        message: 'Each transfer must specify at least one card or pack',
+      });
+    }
   }
 
-  if (!cards?.length && !packs?.length) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'At least one card or pack must be specified for transfer',
-    });
-  }
+  const uniqueUserIds = [...new Set(transfers.flatMap(t => [t.fromUserId, t.toUserId]))];
 
   const MAX_RETRIES = 5;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      const [fromItem, toItem] = await Promise.all([
-        db.get(`USER#${fromUserId}`, 'INVENTORY'),
-        db.get(`USER#${toUserId}`, 'INVENTORY'),
-      ]);
+      const items = await Promise.all(uniqueUserIds.map(userId => db.get(`USER#${userId}`, 'INVENTORY')));
 
-      if (!fromItem) {
-        return buildResponse(404, {
-          success: false,
-          error: 'Not Found',
-          message: `Sender inventory not found`,
-        });
-      }
+      const inventories = new Map(
+        uniqueUserIds.map((userId, index) => [
+          userId,
+          items[index]
+            ? {
+                userId: items[index].userId as string,
+                packs: (items[index].packs as Record<string, number>) || {},
+                cards: (items[index].cards as InventoryCard[]) || [],
+                version: (items[index].version as number) || 0,
+                exists: true,
+              }
+            : {
+                userId,
+                packs: {},
+                cards: [],
+                version: 0,
+                exists: false,
+              },
+        ]),
+      );
 
-      const fromInventory = {
-        userId: fromItem.userId as string,
-        packs: (fromItem.packs as Record<string, number>) || {},
-        cards: (fromItem.cards as InventoryCard[]) || [],
-        version: (fromItem.version as number) || 0,
-      };
+      for (const { fromUserId, toUserId, cards, packs } of transfers) {
+        const fromInventory = inventories.get(fromUserId);
+        const toInventory = inventories.get(toUserId);
 
-      const toInventory = toItem
-        ? {
-            userId: toItem.userId as string,
-            packs: (toItem.packs as Record<string, number>) || {},
-            cards: (toItem.cards as InventoryCard[]) || [],
-            version: (toItem.version as number) || 0,
+        if (!fromInventory || !toInventory) {
+          return buildResponse(500, {
+            success: false,
+            error: 'Internal Server Error',
+            message: 'Failed to load user inventory',
+          });
+        }
+
+        if (!fromInventory.exists) {
+          return buildResponse(404, {
+            success: false,
+            error: 'Not Found',
+            message: `Inventory not found for user ${fromUserId}`,
+          });
+        }
+
+        if (cards?.length) {
+          for (const { cardId } of cards) {
+            const cardIndex = fromInventory.cards.findIndex(c => c.cardId === cardId);
+            if (cardIndex === -1) {
+              return buildResponse(400, {
+                success: false,
+                error: 'Bad Request',
+                message: `Card ${cardId} not found in ${fromUserId}'s inventory`,
+              });
+            }
+            toInventory.cards.push(fromInventory.cards[cardIndex]);
+            fromInventory.cards.splice(cardIndex, 1);
           }
-        : {
-            userId: toUserId,
-            packs: {},
-            cards: [],
-            version: 0,
-          };
+        }
 
-      if (cards?.length) {
-        for (const { cardId } of cards) {
-          const cardIndex = fromInventory.cards.findIndex(c => c.cardId === cardId);
-          if (cardIndex === -1) {
-            return buildResponse(400, {
-              success: false,
-              error: 'Bad Request',
-              message: `Card ${cardId} not found in sender's inventory`,
-            });
+        if (packs?.length) {
+          for (const { packName, quantity } of packs) {
+            if ((fromInventory.packs[packName] || 0) < quantity) {
+              return buildResponse(400, {
+                success: false,
+                error: 'Bad Request',
+                message: `Insufficient packs. User ${fromUserId} has ${
+                  fromInventory.packs[packName] || 0
+                } ${packName} but trying to send ${quantity}`,
+              });
+            }
+            fromInventory.packs[packName] -= quantity;
+            if (fromInventory.packs[packName] === 0) delete fromInventory.packs[packName];
+            toInventory.packs[packName] = (toInventory.packs[packName] || 0) + quantity;
           }
-          toInventory.cards.push(fromInventory.cards[cardIndex]);
-          fromInventory.cards.splice(cardIndex, 1);
         }
       }
 
-      if (packs?.length) {
-        for (const { packName, quantity } of packs) {
-          if ((fromInventory.packs[packName] || 0) < quantity) {
-            return buildResponse(400, {
-              success: false,
-              error: 'Bad Request',
-              message: `Insufficient packs. Sender has ${
-                fromInventory.packs[packName] || 0
-              } ${packName} but trying to send ${quantity}`,
-            });
-          }
-          fromInventory.packs[packName] -= quantity;
-          if (fromInventory.packs[packName] === 0) delete fromInventory.packs[packName];
-          toInventory.packs[packName] = (toInventory.packs[packName] || 0) + quantity;
+      const operations: Parameters<typeof db.transactWrite>[0] = [];
+
+      for (const [userId, inventory] of inventories) {
+        inventory.version++;
+
+        if (inventory.exists) {
+          operations.push({
+            type: 'Update',
+            pk: `USER#${userId}`,
+            sk: 'INVENTORY',
+            updates: {
+              cards: inventory.cards,
+              packs: inventory.packs,
+              version: inventory.version,
+              updatedAt: new Date().toISOString(),
+            },
+            condition: '#version = :expectedVersion',
+            conditionNames: {
+              '#version': 'version',
+            },
+            conditionValues: {
+              ':expectedVersion': inventory.version - 1,
+            },
+          });
+        } else {
+          operations.push({
+            type: 'Put',
+            pk: `USER#${userId}`,
+            sk: 'INVENTORY',
+            item: {
+              userId,
+              cards: inventory.cards,
+              packs: inventory.packs,
+              version: inventory.version,
+              updatedAt: new Date().toISOString(),
+            },
+            condition: 'attribute_not_exists(pk)',
+          });
         }
-      }
-
-      fromInventory.version++;
-      toInventory.version++;
-
-      const operations: Parameters<typeof db.transactWrite>[0] = [
-        {
-          type: 'Update',
-          pk: `USER#${fromUserId}`,
-          sk: 'INVENTORY',
-          updates: {
-            cards: fromInventory.cards,
-            packs: fromInventory.packs,
-            version: fromInventory.version,
-            updatedAt: new Date().toISOString(),
-          },
-          condition: '#version = :expectedVersion',
-          conditionNames: {
-            '#version': 'version',
-          },
-          conditionValues: {
-            ':expectedVersion': fromInventory.version - 1,
-          },
-        },
-      ];
-
-      if (toItem) {
-        operations.push({
-          type: 'Update',
-          pk: `USER#${toUserId}`,
-          sk: 'INVENTORY',
-          updates: {
-            cards: toInventory.cards,
-            packs: toInventory.packs,
-            version: toInventory.version,
-            updatedAt: new Date().toISOString(),
-          },
-          condition: '#version = :expectedVersion',
-          conditionNames: {
-            '#version': 'version',
-          },
-          conditionValues: {
-            ':expectedVersion': toInventory.version - 1,
-          },
-        });
-      } else {
-        operations.push({
-          type: 'Put',
-          pk: `USER#${toUserId}`,
-          sk: 'INVENTORY',
-          item: {
-            userId: toUserId,
-            cards: toInventory.cards,
-            packs: toInventory.packs,
-            version: toInventory.version,
-            updatedAt: new Date().toISOString(),
-          },
-          condition: 'attribute_not_exists(pk)',
-        });
       }
 
       await db.transactWrite(operations);
 
       return buildResponse(200, {
         success: true,
-        message: 'Transfer completed successfully',
-        data: {
-          from: {
-            userId: fromUserId,
-            cards: fromInventory.cards,
-            packs: fromInventory.packs,
-          },
-          to: {
-            userId: toUserId,
-            cards: toInventory.cards,
-            packs: toInventory.packs,
-          },
-        },
+        message: 'Trade completed successfully',
+        data: Object.fromEntries(
+          Array.from(inventories.entries()).map(([userId, inv]) => [userId, { cards: inv.cards, packs: inv.packs }]),
+        ),
       });
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'TransactionCanceledException') {
@@ -216,18 +215,17 @@ export const handler: APIGatewayProxyHandler = async event => {
           return buildResponse(409, {
             success: false,
             error: 'Conflict',
-            message: 'Transaction failed due to concurrent modifications. Please retry.',
+            message: 'Trade failed due to concurrent modifications. Please retry.',
           });
         }
         await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
-        continue;
       }
 
-      console.error('Error in transfer:', error);
+      console.error('Error in trade:', error);
       return buildResponse(500, {
         success: false,
         error: 'Internal Server Error',
-        message: 'Failed to complete transfer',
+        message: 'Failed to complete trade',
       });
     }
   }

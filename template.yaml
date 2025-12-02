@@ -254,7 +254,7 @@ Resources:
   # POST /transfer [AUTH REQUIRED]
   TransferBetweenUsersFunction:
     Type: AWS::Serverless::Function
-    Description: Atomically transfer cards/packs between users
+    Description: Atomically execute multi-way trades between users
     Timeout: 10
     MemorySize: 256
     Metadata:
