@@ -95,14 +95,10 @@ export const handler: APIGatewayProxyHandler = async event => {
                 message: 'addCard requires card with yps (yenPerSecond) field',
               });
             }
-            if (typeof operation.card.placed !== 'boolean') {
-              return buildResponse(400, {
-                success: false,
-                error: 'Bad Request',
-                message: 'addCard requires card with placed (boolean) field',
-              });
-            }
-            inventory.cards.push(operation.card);
+            inventory.cards.push({
+              ...operation.card,
+              placed: operation.card.placed ?? false,
+            });
             break;
           }
 
