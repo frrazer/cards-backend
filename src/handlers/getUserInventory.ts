@@ -30,17 +30,22 @@ export const handler: APIGatewayProxyHandler = async event => {
           userId,
           packs: {},
           cards: [],
+          totalYps: 0,
           version: 0,
         },
       });
     }
+
+    const cards = (item.cards as Array<InventoryCard>) || [];
+    const totalYps = cards.reduce((sum, card) => sum + (card.yps || 0), 0);
 
     return buildResponse(200, {
       success: true,
       data: {
         userId: item.userId as string,
         packs: (item.packs as Record<string, number>) || {},
-        cards: (item.cards as Array<InventoryCard>) || [],
+        cards,
+        totalYps,
         version: (item.version as number) || 0,
       },
     });

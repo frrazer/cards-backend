@@ -3,12 +3,14 @@ export interface InventoryCard {
   cardName: string;
   level: number;
   variant: string;
+  yps: number;
 }
 
 export interface UserInventory {
   userId: string;
   packs: Record<string, number>;
   cards: InventoryCard[];
+  totalYps: number;
   version?: number;
 }
 
