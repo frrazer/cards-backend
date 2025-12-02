@@ -232,7 +232,7 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       StageName: !Ref Env
-      MinimumCompressionSize: 1024
+      MinimumCompressionSize: 0
       Auth:
         Authorizers:
           ApiAuthorizer:
