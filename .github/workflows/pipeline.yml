@@ -17,6 +17,24 @@ jobs:
         steps:
             - uses: actions/checkout@v3
 
+            - name: Notify Start
+              continue-on-error: true
+              run: |
+                  curl -H "Content-Type: application/json" -X POST -d '{
+                    "embeds": [{
+                      "title": "🚀 Deployment Started",
+                      "description": "Building and deploying Cards API",
+                      "color": 3447003,
+                      "fields": [
+                        {"name": "Environment", "value": "${{ github.event_name == 'push' && 'DEV' || 'PROD' }}", "inline": true},
+                        {"name": "Branch", "value": "${{ github.ref_name }}", "inline": true},
+                        {"name": "Commit", "value": "`${{ github.sha }}` by ${{ github.actor }}", "inline": false}
+                      ],
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                      "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
+                    }]
+                  }' ${{ secrets.DISCORD_WEBHOOK }}
+
             - name: Setup Node.js
               uses: actions/setup-node@v3
               with:
@@ -38,6 +56,19 @@ jobs:
             - name: SAM Build
               run: sam build
 
+            - name: Notify Build Complete
+              continue-on-error: true
+              run: |
+                  curl -H "Content-Type: application/json" -X POST -d '{
+                    "embeds": [{
+                      "title": "✅ Build Complete",
+                      "description": "SAM build finished successfully",
+                      "color": 5763719,
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                      "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
+                    }]
+                  }' ${{ secrets.DISCORD_WEBHOOK }}
+
             - name: Deploy to DEV
               if: github.event_name == 'push'
               run: |
@@ -49,6 +80,24 @@ jobs:
                     --no-confirm-changeset \
                     --no-fail-on-empty-changeset
 
+            - name: Notify DEV Deployment
+              if: github.event_name == 'push'
+              continue-on-error: true
+              run: |
+                  curl -H "Content-Type: application/json" -X POST -d '{
+                    "embeds": [{
+                      "title": "🎉 DEV Deployment Complete",
+                      "description": "Cards API successfully deployed to development",
+                      "color": 3066993,
+                      "fields": [
+                        {"name": "Stack", "value": "cards-api-dev", "inline": true},
+                        {"name": "Region", "value": "us-east-1", "inline": true}
+                      ],
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                      "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
+                    }]
+                  }' ${{ secrets.DISCORD_WEBHOOK }}
+
             - name: Deploy to PROD
               if: github.event_name == 'release'
               run: |
@@ -59,3 +108,41 @@ jobs:
                     --resolve-s3 \
                     --no-confirm-changeset \
                     --no-fail-on-empty-changeset
+
+            - name: Notify PROD Deployment
+              if: github.event_name == 'release'
+              continue-on-error: true
+              run: |
+                  curl -H "Content-Type: application/json" -X POST -d '{
+                    "embeds": [{
+                      "title": "🎉 PROD Deployment Complete",
+                      "description": "Cards API successfully deployed to production",
+                      "color": 3066993,
+                      "fields": [
+                        {"name": "Stack", "value": "cards-api-prod", "inline": true},
+                        {"name": "Region", "value": "us-east-1", "inline": true},
+                        {"name": "Release", "value": "${{ github.event.release.tag_name }}", "inline": true}
+                      ],
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                      "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
+                    }]
+                  }' ${{ secrets.DISCORD_WEBHOOK }}
+
+            - name: Notify Failure
+              if: failure()
+              continue-on-error: true
+              run: |
+                  curl -H "Content-Type: application/json" -X POST -d '{
+                    "embeds": [{
+                      "title": "❌ Deployment Failed",
+                      "description": "Cards API deployment encountered an error",
+                      "color": 15158332,
+                      "fields": [
+                        {"name": "Environment", "value": "${{ github.event_name == 'push' && 'DEV' || 'PROD' }}", "inline": true},
+                        {"name": "Branch", "value": "${{ github.ref_name }}", "inline": true},
+                        {"name": "Triggered by", "value": "${{ github.actor }}", "inline": true}
+                      ],
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                      "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
+                    }]
+                  }' ${{ secrets.DISCORD_WEBHOOK }}
