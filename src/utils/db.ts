@@ -278,7 +278,9 @@ export const db = {
       sk: string;
       item?: Record<string, unknown>;
       updates?: Record<string, unknown>;
+      increments?: Record<string, number>; // For ADD operations
       condition?: string;
+      conditionNames?: Record<string, string>;
       conditionValues?: Record<string, unknown>;
     }>,
   ) => {
@@ -290,16 +292,19 @@ export const db = {
               TableName: TABLE_NAME,
               Item: { pk: op.pk, sk: op.sk, ...op.item },
               ConditionExpression: op.condition,
+              ExpressionAttributeNames: op.conditionNames,
               ExpressionAttributeValues: op.conditionValues,
             },
           };
         case 'Update': {
-          const keys = Object.keys(op.updates || {});
+          const setKeys = Object.keys(op.updates || {});
+          const addKeys = Object.keys(op.increments || {});
           const updateExpressions: string[] = [];
-          const expressionAttributeNames: Record<string, string> = {};
+          const addExpressions: string[] = [];
+          const expressionAttributeNames: Record<string, string> = { ...op.conditionNames };
           const expressionAttributeValues: Record<string, unknown> = { ...op.conditionValues };
 
-          keys.forEach((key, index) => {
+          setKeys.forEach((key, index) => {
             const attrName = `#attr${index}`;
             const attrValue = `:val${index}`;
             updateExpressions.push(`${attrName} = ${attrValue}`);
@@ -307,15 +312,32 @@ export const db = {
             expressionAttributeValues[attrValue] = op.updates?.[key];
           });
 
+          addKeys.forEach((key, index) => {
+            const attrName = `#add${index}`;
+            const attrValue = `:add${index}`;
+            addExpressions.push(`${attrName} ${attrValue}`);
+            expressionAttributeNames[attrName] = key;
+            expressionAttributeValues[attrValue] = op.increments?.[key];
+          });
+
+          const expressionParts: string[] = [];
+          if (updateExpressions.length > 0) {
+            expressionParts.push(`SET ${updateExpressions.join(', ')}`);
+          }
+          if (addExpressions.length > 0) {
+            expressionParts.push(`ADD ${addExpressions.join(', ')}`);
+          }
+
           return {
             Update: {
               TableName: TABLE_NAME,
               Key: { pk: op.pk, sk: op.sk },
-              UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+              UpdateExpression: expressionParts.join(' '),
               ConditionExpression: op.condition,
               ExpressionAttributeNames:
                 Object.keys(expressionAttributeNames).length > 0 ? expressionAttributeNames : undefined,
-              ExpressionAttributeValues: expressionAttributeValues,
+              ExpressionAttributeValues:
+                Object.keys(expressionAttributeValues).length > 0 ? expressionAttributeValues : undefined,
             },
           };
         }
@@ -325,6 +347,7 @@ export const db = {
               TableName: TABLE_NAME,
               Key: { pk: op.pk, sk: op.sk },
               ConditionExpression: op.condition,
+              ExpressionAttributeNames: op.conditionNames,
               ExpressionAttributeValues: op.conditionValues,
             },
           };
@@ -334,6 +357,7 @@ export const db = {
               TableName: TABLE_NAME,
               Key: { pk: op.pk, sk: op.sk },
               ConditionExpression: op.condition ?? '',
+              ExpressionAttributeNames: op.conditionNames,
               ExpressionAttributeValues: op.conditionValues,
             },
           };

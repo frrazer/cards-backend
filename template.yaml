@@ -251,6 +251,36 @@ Resources:
             Auth:
               Authorizer: ApiAuthorizer
 
+  # POST /transfer [AUTH REQUIRED]
+  TransferBetweenUsersFunction:
+    Type: AWS::Serverless::Function
+    Description: Atomically transfer cards/packs between users
+    Timeout: 10
+    MemorySize: 256
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/transferBetweenUsers.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/transferBetweenUsers.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /transfer
+            Method: post
+            Auth:
+              Authorizer: ApiAuthorizer
+
   # ANY /{proxy+}
   NotFoundFunction:
     Type: AWS::Serverless::Function
