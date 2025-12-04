@@ -222,6 +222,125 @@ Resources:
             Method: get
 
 
+  # POST /marketplace/buy [AUTH REQUIRED]
+  MarketplaceBuyFunction:
+    Type: AWS::Serverless::Function
+    Description: Purchases a card from the marketplace, transferring it to the buyer
+    Timeout: 10
+    MemorySize: 256
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/marketplaceBuy.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/marketplaceBuy.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /marketplace/buy
+            Method: post
+            Auth:
+              Authorizer: ApiAuthorizer
+
+  # GET /marketplace/listings
+  MarketplaceGetListingsFunction:
+    Type: AWS::Serverless::Function
+    Description: Get 100 cheapest marketplace listings, optionally filtered by card name and level
+    Timeout: 5
+    MemorySize: 256
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/marketplaceGetListings.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/marketplaceGetListings.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /marketplace/listings
+            Method: get
+
+
+  # POST /marketplace/list [AUTH REQUIRED]
+  MarketplaceListFunction:
+    Type: AWS::Serverless::Function
+    Description: Lists a card for sale on the marketplace
+    Timeout: 5
+    MemorySize: 256
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/marketplaceList.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/marketplaceList.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /marketplace/list
+            Method: post
+            Auth:
+              Authorizer: ApiAuthorizer
+
+  # POST /marketplace/unlist [AUTH REQUIRED]
+  MarketplaceUnlistFunction:
+    Type: AWS::Serverless::Function
+    Description: Unlists a card from the marketplace
+    Timeout: 5
+    MemorySize: 256
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/marketplaceUnlist.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/marketplaceUnlist.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /marketplace/unlist
+            Method: post
+            Auth:
+              Authorizer: ApiAuthorizer
+
   # POST /user/inventory/modify [AUTH REQUIRED]
   ModifyUserInventoryFunction:
     Type: AWS::Serverless::Function

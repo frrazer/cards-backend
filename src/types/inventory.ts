@@ -22,3 +22,14 @@ export interface ModifyInventoryRequest {
   userId: string;
   operations: ModifyInventoryAction[];
 }
+
+export interface MarketplaceListing {
+  cardId: string;
+  cardName: string;
+  cardLevel: number;
+  cardVariant: string;
+  sellerId: string;
+  sellerUsername: string;
+  cost: number;
+  listedAt: string;
+}
