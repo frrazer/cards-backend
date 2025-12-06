@@ -57,6 +57,7 @@ export const handler: APIGatewayProxyHandler = async event => {
     }
 
     const listing = listingItem as unknown as MarketplaceListing;
+    const cardLevel = listing.cardLevel ?? 1;
     const paddedCost = padCost(listing.cost);
 
     await db.transactWrite([
@@ -68,13 +69,13 @@ export const handler: APIGatewayProxyHandler = async event => {
       },
       {
         type: 'Delete',
-        pk: `MARKET#${listing.cardName}#${listing.cardLevel}`,
+        pk: `MARKET#${listing.cardName}#${cardLevel}`,
         sk: `${paddedCost}#${cardId}`,
       },
       {
         type: 'Delete',
         pk: 'MARKET_ALL',
-        sk: `${paddedCost}#${listing.cardName}#${listing.cardLevel}#${cardId}`,
+        sk: `${paddedCost}#${listing.cardName}#${cardLevel}#${cardId}`,
       },
     ]);
 

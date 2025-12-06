@@ -89,11 +89,13 @@ export const handler: APIGatewayProxyHandler = async event => {
         });
       }
 
+      const cardLevel = card.level ?? 1;
+
       const listing: MarketplaceListing = {
         cardId,
         cardName: card.cardName,
-        cardLevel: card.level,
-        cardVariant: card.variant,
+        cardLevel,
+        cardVariant: card.variant ?? 'Normal',
         sellerId: userId,
         sellerUsername: username,
         cost,
@@ -112,7 +114,7 @@ export const handler: APIGatewayProxyHandler = async event => {
         },
         {
           type: 'Put',
-          pk: `MARKET#${card.cardName}#${card.level}`,
+          pk: `MARKET#${card.cardName}#${cardLevel}`,
           sk: `${paddedCost}#${cardId}`,
           item: { cardId },
           condition: 'attribute_not_exists(pk)',
@@ -120,7 +122,7 @@ export const handler: APIGatewayProxyHandler = async event => {
         {
           type: 'Put',
           pk: 'MARKET_ALL',
-          sk: `${paddedCost}#${card.cardName}#${card.level}#${cardId}`,
+          sk: `${paddedCost}#${card.cardName}#${cardLevel}#${cardId}`,
           item: { cardId },
           condition: 'attribute_not_exists(pk)',
         },

@@ -62,6 +62,7 @@ export const handler: APIGatewayProxyHandler = async event => {
       }
 
       const listing = listingItem as unknown as MarketplaceListing;
+      const cardLevel = listing.cardLevel ?? 1;
 
       if (listing.cost !== expectedCost) {
         return buildResponse(409, {
@@ -100,16 +101,16 @@ export const handler: APIGatewayProxyHandler = async event => {
           { type: 'Delete', pk: `LISTING#${cardId}`, sk: 'LISTING' },
           {
             type: 'Delete',
-            pk: `MARKET#${listing.cardName}#${listing.cardLevel}`,
+            pk: `MARKET#${listing.cardName}#${cardLevel}`,
             sk: `${padCost(listing.cost)}#${cardId}`,
           },
           {
             type: 'Delete',
             pk: 'MARKET_ALL',
-            sk: `${padCost(listing.cost)}#${listing.cardName}#${listing.cardLevel}#${cardId}`,
+            sk: `${padCost(listing.cost)}#${listing.cardName}#${cardLevel}#${cardId}`,
           },
         ]);
-        invalidateListingsCache(listing.cardName, listing.cardLevel);
+        invalidateListingsCache(listing.cardName, cardLevel);
 
         return buildResponse(410, {
           success: false,
@@ -140,13 +141,13 @@ export const handler: APIGatewayProxyHandler = async event => {
         },
         {
           type: 'Delete',
-          pk: `MARKET#${listing.cardName}#${listing.cardLevel}`,
+          pk: `MARKET#${listing.cardName}#${cardLevel}`,
           sk: `${paddedCost}#${cardId}`,
         },
         {
           type: 'Delete',
           pk: 'MARKET_ALL',
-          sk: `${paddedCost}#${listing.cardName}#${listing.cardLevel}#${cardId}`,
+          sk: `${paddedCost}#${listing.cardName}#${cardLevel}#${cardId}`,
         },
         {
           type: 'Update',
@@ -196,15 +197,16 @@ export const handler: APIGatewayProxyHandler = async event => {
       }
 
       await db.transactWrite(operations);
-      invalidateListingsCache(listing.cardName, listing.cardLevel);
+      invalidateListingsCache(listing.cardName, cardLevel);
 
       return buildResponse(200, {
         success: true,
         message: 'Purchase successful',
         data: {
-          card,
+          card: { ...card, level: card.level ?? cardLevel },
           cost: listing.cost,
           sellerId: listing.sellerId,
+          cardLevel,
         },
       });
     } catch (error: unknown) {

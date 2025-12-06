@@ -15,6 +15,7 @@ export interface UserInventory {
 export type ModifyInventoryAction =
   | { action: 'addCard'; card: InventoryCard }
   | { action: 'removeCard'; cardId: string }
+  | { action: 'setCardLevel'; cardId: string; level: number }
   | { action: 'addPack'; packName: string; quantity?: number }
   | { action: 'removePack'; packName: string; quantity?: number };
 

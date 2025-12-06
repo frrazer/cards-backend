@@ -86,7 +86,12 @@ export const handler: APIGatewayProxyHandler = async event => {
                 message: 'addCard requires card with cardId and cardName',
               });
             }
-            inventory.cards.push(operation.card);
+            inventory.cards.push({
+              cardId: operation.card.cardId,
+              cardName: operation.card.cardName,
+              level: operation.card.level ?? 1,
+              variant: operation.card.variant ?? 'Normal',
+            });
             break;
           }
 
@@ -107,6 +112,33 @@ export const handler: APIGatewayProxyHandler = async event => {
               });
             }
             inventory.cards.splice(index, 1);
+            break;
+          }
+
+          case 'setCardLevel': {
+            if (!operation.cardId || operation.level === undefined) {
+              return buildResponse(400, {
+                success: false,
+                error: 'Bad Request',
+                message: 'setCardLevel requires cardId and level',
+              });
+            }
+            if (typeof operation.level !== 'number' || operation.level < 1 || !Number.isInteger(operation.level)) {
+              return buildResponse(400, {
+                success: false,
+                error: 'Bad Request',
+                message: 'level must be a positive integer',
+              });
+            }
+            const cardIndex = inventory.cards.findIndex(card => card.cardId === operation.cardId);
+            if (cardIndex === -1) {
+              return buildResponse(404, {
+                success: false,
+                error: 'Not Found',
+                message: `Card with id ${operation.cardId} not found in inventory`,
+              });
+            }
+            inventory.cards[cardIndex].level = operation.level;
             break;
           }
 
