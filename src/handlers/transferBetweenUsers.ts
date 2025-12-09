@@ -14,6 +14,17 @@ interface TradeRequest {
   transfers: Transfer[];
 }
 
+const IDEMPOTENCY_TTL_SECONDS = 600;
+async function idempotentResponse(key: string, statusCode: number, body: Record<string, unknown>) {
+  await db.update(`IDEMPOTENCY#${key}`, 'TRANSFER', {
+    status: 'completed',
+    statusCode,
+    response: body,
+    completedAt: new Date().toISOString(),
+  });
+  return buildResponse(statusCode, body);
+}
+
 /**
  * @route POST /transfer
  * @auth
@@ -22,8 +33,50 @@ interface TradeRequest {
  * @description Atomically execute multi-way trades between users
  */
 export const handler: APIGatewayProxyHandler = async event => {
-  if (!event.body) {
+  const idempotencyKey = event.headers['Idempotency-Key'] || event.headers['idempotency-key'];
+
+  if (!idempotencyKey) {
     return buildResponse(400, {
+      success: false,
+      error: 'Bad Request',
+      message: 'Idempotency-Key header is required for transfer operations',
+    });
+  }
+
+  const existing = await db.get(`IDEMPOTENCY#${idempotencyKey}`, 'TRANSFER');
+  if (existing) {
+    if (existing.status === 'processing') {
+      return buildResponse(409, {
+        success: false,
+        error: 'Conflict',
+        message: 'This request is already being processed',
+      });
+    }
+    return buildResponse(existing.statusCode as number, existing.response as Record<string, unknown>);
+  }
+
+  try {
+    await db.put({
+      pk: `IDEMPOTENCY#${idempotencyKey}`,
+      sk: 'TRANSFER',
+      status: 'processing',
+      createdAt: new Date().toISOString(),
+      ttl: Math.floor(Date.now() / 1000) + IDEMPOTENCY_TTL_SECONDS,
+      condition: 'attribute_not_exists(pk)',
+    });
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      return buildResponse(409, {
+        success: false,
+        error: 'Conflict',
+        message: 'This request is already being processed',
+      });
+    }
+    throw error;
+  }
+
+  if (!event.body) {
+    return idempotentResponse(idempotencyKey, 400, {
       success: false,
       error: 'Bad Request',
       message: 'Request body is required',
@@ -34,7 +87,7 @@ export const handler: APIGatewayProxyHandler = async event => {
   try {
     request = JSON.parse(event.body) as TradeRequest;
   } catch {
-    return buildResponse(400, {
+    return idempotentResponse(idempotencyKey, 400, {
       success: false,
       error: 'Bad Request',
       message: 'Invalid JSON in request body',
@@ -44,7 +97,7 @@ export const handler: APIGatewayProxyHandler = async event => {
   const { transfers } = request;
 
   if (!transfers?.length) {
-    return buildResponse(400, {
+    return idempotentResponse(idempotencyKey, 400, {
       success: false,
       error: 'Bad Request',
       message: 'At least one transfer is required',
@@ -53,7 +106,7 @@ export const handler: APIGatewayProxyHandler = async event => {
 
   for (const transfer of transfers) {
     if (!transfer.fromUserId || !transfer.toUserId) {
-      return buildResponse(400, {
+      return idempotentResponse(idempotencyKey, 400, {
         success: false,
         error: 'Bad Request',
         message: 'Each transfer requires fromUserId and toUserId',
@@ -61,7 +114,7 @@ export const handler: APIGatewayProxyHandler = async event => {
     }
 
     if (transfer.fromUserId === transfer.toUserId) {
-      return buildResponse(400, {
+      return idempotentResponse(idempotencyKey, 400, {
         success: false,
         error: 'Bad Request',
         message: 'Cannot transfer to self',
@@ -69,7 +122,7 @@ export const handler: APIGatewayProxyHandler = async event => {
     }
 
     if (!transfer.cards?.length && !transfer.packs?.length) {
-      return buildResponse(400, {
+      return idempotentResponse(idempotencyKey, 400, {
         success: false,
         error: 'Bad Request',
         message: 'Each transfer must specify at least one card or pack',
@@ -118,7 +171,7 @@ export const handler: APIGatewayProxyHandler = async event => {
         }
 
         if (!fromInventory.exists) {
-          return buildResponse(404, {
+          return idempotentResponse(idempotencyKey, 404, {
             success: false,
             error: 'Not Found',
             message: `Inventory not found for user ${fromUserId}`,
@@ -129,7 +182,7 @@ export const handler: APIGatewayProxyHandler = async event => {
           for (const { cardId } of cards) {
             const cardIndex = fromInventory.cards.findIndex(c => c.cardId === cardId);
             if (cardIndex === -1) {
-              return buildResponse(400, {
+              return idempotentResponse(idempotencyKey, 400, {
                 success: false,
                 error: 'Bad Request',
                 message: `Card ${cardId} not found in ${fromUserId}'s inventory`,
@@ -143,7 +196,7 @@ export const handler: APIGatewayProxyHandler = async event => {
         if (packs?.length) {
           for (const { packName, quantity } of packs) {
             if ((fromInventory.packs[packName] || 0) < quantity) {
-              return buildResponse(400, {
+              return idempotentResponse(idempotencyKey, 400, {
                 success: false,
                 error: 'Bad Request',
                 message: `Insufficient packs. User ${fromUserId} has ${
@@ -201,7 +254,7 @@ export const handler: APIGatewayProxyHandler = async event => {
 
       await db.transactWrite(operations);
 
-      return buildResponse(200, {
+      return idempotentResponse(idempotencyKey, 200, {
         success: true,
         message: 'Trade completed successfully',
         data: Object.fromEntries(
@@ -219,6 +272,7 @@ export const handler: APIGatewayProxyHandler = async event => {
           });
         }
         await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+        continue;
       }
 
       console.error('Error in trade:', error);
