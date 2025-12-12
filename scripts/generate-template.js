@@ -168,6 +168,10 @@ Globals:
     MemorySize: 128
     Runtime: nodejs20.x
     Architectures: [arm64]
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: INFO
     Environment:
       Variables:
         NODE_ENV: !Ref Env
