@@ -285,8 +285,8 @@ Resources:
   MarketplaceGetListingsFunction:
     Type: AWS::Serverless::Function
     Description: Get all marketplace listings for a specific user
-    Timeout: 3
-    MemorySize: 128
+    Timeout: 5
+    MemorySize: 256
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -313,7 +313,7 @@ Resources:
   # POST /marketplace/list [AUTH REQUIRED]
   MarketplaceListFunction:
     Type: AWS::Serverless::Function
-    Description: Lists a card or pack for sale on the marketplace (max 4 slots per user)
+    Description: Lists a card or pack for sale on the marketplace (max 50 per user)
     Timeout: 5
     MemorySize: 256
     Metadata:
@@ -343,7 +343,7 @@ Resources:
   # POST /marketplace/unlist [AUTH REQUIRED]
   MarketplaceUnlistFunction:
     Type: AWS::Serverless::Function
-    Description: Unlists an item from the marketplace by slot
+    Description: Unlists an item from the marketplace
     Timeout: 5
     MemorySize: 256
     Metadata:

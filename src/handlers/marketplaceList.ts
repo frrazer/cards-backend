@@ -1,14 +1,14 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
 import { buildResponse } from '../utils/response';
 import { db } from '../utils/db';
-import { InventoryCard, CardListing, PackListing, MarketplaceListing, UserSlots } from '../types/inventory';
+import { InventoryCard, CardListing, PackListing, MarketplaceListing } from '../types/inventory';
+import { randomUUID } from 'crypto';
 
 interface ListCardRequest {
   type: 'card';
   userId: string;
   username: string;
   cardId: string;
-  slot: number;
   cost: number;
 }
 
@@ -17,20 +17,19 @@ interface ListPackRequest {
   userId: string;
   username: string;
   packName: string;
-  slot: number;
   cost: number;
 }
 
 type ListRequest = ListCardRequest | ListPackRequest;
 
-const MAX_SLOTS = 4;
+const MAX_LISTINGS = 256;
 
 /**
  * @route POST /marketplace/list
  * @auth
  * @timeout 5
  * @memory 256
- * @description Lists a card or pack for sale on the marketplace (max 4 slots per user)
+ * @description Lists a card or pack for sale on the marketplace (max 50 per user)
  */
 export const handler: APIGatewayProxyHandler = async event => {
   if (!event.body) {
@@ -52,13 +51,13 @@ export const handler: APIGatewayProxyHandler = async event => {
     });
   }
 
-  const { type, userId, username, slot, cost } = request;
+  const { type, userId, username, cost } = request;
 
-  if (!type || !userId || !username || !slot || cost === undefined) {
+  if (!type || !userId || !username || cost === undefined) {
     return buildResponse(400, {
       success: false,
       error: 'Bad Request',
-      message: 'type, userId, username, slot, and cost are required',
+      message: 'type, userId, username, and cost are required',
     });
   }
 
@@ -67,14 +66,6 @@ export const handler: APIGatewayProxyHandler = async event => {
       success: false,
       error: 'Bad Request',
       message: 'type must be "card" or "pack"',
-    });
-  }
-
-  if (!Number.isInteger(slot) || slot < 1 || slot > MAX_SLOTS) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: `slot must be an integer between 1 and ${MAX_SLOTS}`,
     });
   }
 
@@ -105,8 +96,9 @@ export const handler: APIGatewayProxyHandler = async event => {
   const MAX_RETRIES = 5;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      const [slotsItem, inventoryItem] = await Promise.all([
-        db.get(`USER_SLOTS#${userId}`, 'SLOTS'),
+      // Get user's current listing count and inventory
+      const [userListingsResult, inventoryItem] = await Promise.all([
+        db.query(`USER_LISTINGS#${userId}`),
         db.get(`USER#${userId}`, 'INVENTORY'),
       ]);
 
@@ -118,14 +110,12 @@ export const handler: APIGatewayProxyHandler = async event => {
         });
       }
 
-      const userSlots: UserSlots = (slotsItem as UserSlots) || { slots: {} };
-      const slotsVersion = (slotsItem?.version as number) || 0;
-
-      if (userSlots.slots[slot]) {
-        return buildResponse(409, {
+      const currentListingCount = userListingsResult.items.length;
+      if (currentListingCount >= MAX_LISTINGS) {
+        return buildResponse(400, {
           success: false,
-          error: 'Conflict',
-          message: `Slot ${slot} is already in use`,
+          error: 'Bad Request',
+          message: `Maximum of ${MAX_LISTINGS} listings reached`,
         });
       }
 
@@ -163,7 +153,6 @@ export const handler: APIGatewayProxyHandler = async event => {
           cardVariant: card.variant ?? 'Normal',
           sellerId: userId,
           sellerUsername: username,
-          slot,
           cost,
           timestamp,
         } satisfies CardListing;
@@ -173,6 +162,14 @@ export const handler: APIGatewayProxyHandler = async event => {
           pk: `LISTING#CARD#${cardId}`,
           sk: 'LISTING',
           item: { ...listing },
+          condition: 'attribute_not_exists(pk)',
+        });
+
+        operations.push({
+          type: 'Put',
+          pk: `USER_LISTINGS#${userId}`,
+          sk: `CARD#${cardId}`,
+          item: { cardId, type: 'card' },
           condition: 'attribute_not_exists(pk)',
         });
       } else {
@@ -187,24 +184,35 @@ export const handler: APIGatewayProxyHandler = async event => {
           });
         }
 
+        const listingId = randomUUID();
+
         listing = {
           type: 'pack',
+          listingId,
           packName,
           sellerId: userId,
           sellerUsername: username,
-          slot,
           cost,
           timestamp,
         } satisfies PackListing;
 
         operations.push({
           type: 'Put',
-          pk: `LISTING#PACK#${userId}#${slot}`,
+          pk: `LISTING#PACK#${listingId}`,
           sk: 'LISTING',
           item: { ...listing },
           condition: 'attribute_not_exists(pk)',
         });
 
+        operations.push({
+          type: 'Put',
+          pk: `USER_LISTINGS#${userId}`,
+          sk: `PACK#${listingId}`,
+          item: { listingId, packName, type: 'pack' },
+          condition: 'attribute_not_exists(pk)',
+        });
+
+        // Decrement pack from inventory
         const inventoryVersion = (inventoryItem.version as number) || 0;
         const updatedPacks = { ...packs, [packName]: packs[packName] - 1 };
         if (updatedPacks[packName] === 0) delete updatedPacks[packName];
@@ -221,36 +229,6 @@ export const handler: APIGatewayProxyHandler = async event => {
           condition: '#version = :expectedVersion',
           conditionNames: { '#version': 'version' },
           conditionValues: { ':expectedVersion': inventoryVersion },
-        });
-      }
-
-      const updatedSlots = { ...userSlots.slots, [slot]: listing };
-
-      if (slotsItem) {
-        operations.push({
-          type: 'Update',
-          pk: `USER_SLOTS#${userId}`,
-          sk: 'SLOTS',
-          updates: {
-            slots: updatedSlots,
-            version: slotsVersion + 1,
-            updatedAt: timestamp,
-          },
-          condition: '#version = :expectedVersion',
-          conditionNames: { '#version': 'version' },
-          conditionValues: { ':expectedVersion': slotsVersion },
-        });
-      } else {
-        operations.push({
-          type: 'Put',
-          pk: `USER_SLOTS#${userId}`,
-          sk: 'SLOTS',
-          item: {
-            slots: updatedSlots,
-            version: 1,
-            updatedAt: timestamp,
-          },
-          condition: 'attribute_not_exists(pk)',
         });
       }
 

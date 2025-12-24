@@ -35,26 +35,21 @@ export interface CardListing {
   cardVariant: string;
   sellerId: string;
   sellerUsername: string;
-  slot: number;
   cost: number;
   timestamp: string;
 }
 
 export interface PackListing {
   type: 'pack';
+  listingId: string;
   packName: string;
   sellerId: string;
   sellerUsername: string;
-  slot: number;
   cost: number;
   timestamp: string;
 }
 
 export type MarketplaceListing = CardListing | PackListing;
-
-export interface UserSlots {
-  slots: Record<number, MarketplaceListing | null>;
-}
 
 export interface RapRecord {
   rap: number;

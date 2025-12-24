@@ -1,7 +1,7 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
 import { buildResponse } from '../utils/response';
 import { db } from '../utils/db';
-import { InventoryCard, CardListing, PackListing, UserSlots, RapRecord } from '../types/inventory';
+import { InventoryCard, CardListing, PackListing, RapRecord } from '../types/inventory';
 
 interface BuyCardRequest {
   type: 'card';
@@ -13,8 +13,7 @@ interface BuyCardRequest {
 interface BuyPackRequest {
   type: 'pack';
   buyerId: string;
-  sellerId: string;
-  slot: number;
+  listingId: string;
   expectedCost: number;
 }
 
@@ -78,11 +77,11 @@ export const handler: APIGatewayProxyHandler = async event => {
     });
   }
 
-  if (type === 'pack' && (!('sellerId' in request && request.sellerId) || !('slot' in request && request.slot))) {
+  if (type === 'pack' && !('listingId' in request && request.listingId)) {
     return buildResponse(400, {
       success: false,
       error: 'Bad Request',
-      message: 'sellerId and slot are required for pack purchases',
+      message: 'listingId is required for pack purchases',
     });
   }
 
@@ -154,10 +153,9 @@ async function handleCardPurchase(request: BuyCardRequest) {
     });
   }
 
-  const [sellerInventoryItem, buyerInventoryItem, sellerSlotsItem, rapItem] = await Promise.all([
+  const [sellerInventoryItem, buyerInventoryItem, rapItem] = await Promise.all([
     db.get(`USER#${listing.sellerId}`, 'INVENTORY'),
     db.get(`USER#${buyerId}`, 'INVENTORY'),
-    db.get(`USER_SLOTS#${listing.sellerId}`, 'SLOTS'),
     db.get(`RAP#CARD#${listing.cardName}`, 'CURRENT'),
   ]);
 
@@ -166,14 +164,6 @@ async function handleCardPurchase(request: BuyCardRequest) {
       success: false,
       error: 'Not Found',
       message: 'Seller inventory not found',
-    });
-  }
-
-  if (!sellerSlotsItem) {
-    return buildResponse(404, {
-      success: false,
-      error: 'Not Found',
-      message: 'Seller slots not found',
     });
   }
 
@@ -195,14 +185,10 @@ async function handleCardPurchase(request: BuyCardRequest) {
   const buyerCards = (buyerInventoryItem?.cards as InventoryCard[]) || [];
   const buyerPacks = (buyerInventoryItem?.packs as Record<string, number>) || {};
   const sellerPacks = (sellerInventoryItem.packs as Record<string, number>) || {};
-  const sellerSlots = sellerSlotsItem as UserSlots & { version: number };
 
   const updatedSellerCards = [...sellerCards];
   updatedSellerCards.splice(cardIndex, 1);
   const updatedBuyerCards = [...buyerCards, card];
-
-  const updatedSellerSlots = { ...sellerSlots.slots };
-  delete updatedSellerSlots[listing.slot];
 
   const timestamp = new Date().toISOString();
 
@@ -217,6 +203,11 @@ async function handleCardPurchase(request: BuyCardRequest) {
       condition: 'attribute_exists(pk)',
     },
     {
+      type: 'Delete',
+      pk: `USER_LISTINGS#${listing.sellerId}`,
+      sk: `CARD#${cardId}`,
+    },
+    {
       type: 'Update',
       pk: `USER#${listing.sellerId}`,
       sk: 'INVENTORY',
@@ -229,19 +220,6 @@ async function handleCardPurchase(request: BuyCardRequest) {
       condition: '#version = :expectedVersion',
       conditionNames: { '#version': 'version' },
       conditionValues: { ':expectedVersion': sellerVersion },
-    },
-    {
-      type: 'Update',
-      pk: `USER_SLOTS#${listing.sellerId}`,
-      sk: 'SLOTS',
-      updates: {
-        slots: updatedSellerSlots,
-        version: sellerSlots.version + 1,
-        updatedAt: timestamp,
-      },
-      condition: '#version = :expectedVersion',
-      conditionNames: { '#version': 'version' },
-      conditionValues: { ':expectedVersion': sellerSlots.version },
     },
   ];
 
@@ -325,17 +303,9 @@ async function handleCardPurchase(request: BuyCardRequest) {
 }
 
 async function handlePackPurchase(request: BuyPackRequest) {
-  const { buyerId, sellerId, slot, expectedCost } = request;
+  const { buyerId, listingId, expectedCost } = request;
 
-  if (sellerId === buyerId) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Cannot buy your own listing',
-    });
-  }
-
-  const listingItem = await db.get(`LISTING#PACK#${sellerId}#${slot}`, 'LISTING');
+  const listingItem = await db.get(`LISTING#PACK#${listingId}`, 'LISTING');
   if (!listingItem) {
     return buildResponse(404, {
       success: false,
@@ -346,6 +316,14 @@ async function handlePackPurchase(request: BuyPackRequest) {
 
   const listing = listingItem as unknown as PackListing;
 
+  if (listing.sellerId === buyerId) {
+    return buildResponse(400, {
+      success: false,
+      error: 'Bad Request',
+      message: 'Cannot buy your own listing',
+    });
+  }
+
   if (listing.cost !== expectedCost) {
     return buildResponse(409, {
       success: false,
@@ -354,28 +332,14 @@ async function handlePackPurchase(request: BuyPackRequest) {
     });
   }
 
-  const [buyerInventoryItem, sellerSlotsItem, rapItem] = await Promise.all([
+  const [buyerInventoryItem, rapItem] = await Promise.all([
     db.get(`USER#${buyerId}`, 'INVENTORY'),
-    db.get(`USER_SLOTS#${sellerId}`, 'SLOTS'),
     db.get(`RAP#PACK#${listing.packName}`, 'CURRENT'),
   ]);
-
-  if (!sellerSlotsItem) {
-    return buildResponse(404, {
-      success: false,
-      error: 'Not Found',
-      message: 'Seller slots not found',
-    });
-  }
 
   const buyerVersion = (buyerInventoryItem?.version as number) || 0;
   const buyerCards = (buyerInventoryItem?.cards as InventoryCard[]) || [];
   const buyerPacks = (buyerInventoryItem?.packs as Record<string, number>) || {};
-  const sellerSlots = sellerSlotsItem as UserSlots & { version: number };
-
-  const updatedSellerSlots = { ...sellerSlots.slots };
-  delete updatedSellerSlots[slot];
-
   const updatedBuyerPacks = { ...buyerPacks, [listing.packName]: (buyerPacks[listing.packName] || 0) + 1 };
 
   const timestamp = new Date().toISOString();
@@ -386,22 +350,14 @@ async function handlePackPurchase(request: BuyPackRequest) {
   const operations: Parameters<typeof db.transactWrite>[0] = [
     {
       type: 'Delete',
-      pk: `LISTING#PACK#${sellerId}#${slot}`,
+      pk: `LISTING#PACK#${listingId}`,
       sk: 'LISTING',
       condition: 'attribute_exists(pk)',
     },
     {
-      type: 'Update',
-      pk: `USER_SLOTS#${sellerId}`,
-      sk: 'SLOTS',
-      updates: {
-        slots: updatedSellerSlots,
-        version: sellerSlots.version + 1,
-        updatedAt: timestamp,
-      },
-      condition: '#version = :expectedVersion',
-      conditionNames: { '#version': 'version' },
-      conditionValues: { ':expectedVersion': sellerSlots.version },
+      type: 'Delete',
+      pk: `USER_LISTINGS#${listing.sellerId}`,
+      sk: `PACK#${listingId}`,
     },
   ];
 
@@ -477,6 +433,7 @@ async function handlePackPurchase(request: BuyPackRequest) {
     data: {
       type: 'pack',
       packName: listing.packName,
+      listingId,
       cost: listing.cost,
       sellerId: listing.sellerId,
       newRap,
@@ -485,36 +442,14 @@ async function handlePackPurchase(request: BuyPackRequest) {
 }
 
 async function cleanupCardListing(listing: CardListing) {
-  const sellerSlotsItem = await db.get(`USER_SLOTS#${listing.sellerId}`, 'SLOTS');
-
   const operations: Parameters<typeof db.transactWrite>[0] = [
     { type: 'Delete', pk: `LISTING#CARD#${listing.cardId}`, sk: 'LISTING' },
+    { type: 'Delete', pk: `USER_LISTINGS#${listing.sellerId}`, sk: `CARD#${listing.cardId}` },
   ];
-
-  if (sellerSlotsItem) {
-    const sellerSlots = sellerSlotsItem as UserSlots & { version: number };
-    const updatedSlots = { ...sellerSlots.slots };
-    delete updatedSlots[listing.slot];
-
-    operations.push({
-      type: 'Update',
-      pk: `USER_SLOTS#${listing.sellerId}`,
-      sk: 'SLOTS',
-      updates: {
-        slots: updatedSlots,
-        version: sellerSlots.version + 1,
-        updatedAt: new Date().toISOString(),
-      },
-      condition: '#version = :expectedVersion',
-      conditionNames: { '#version': 'version' },
-      conditionValues: { ':expectedVersion': sellerSlots.version },
-    });
-  }
 
   try {
     await db.transactWrite(operations);
   } catch (error) {
-    // Cleanup is best-effort - log but don't fail the request
     console.warn('Failed to cleanup orphan listing:', error);
   }
 }
