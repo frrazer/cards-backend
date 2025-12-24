@@ -24,13 +24,55 @@ export interface ModifyInventoryRequest {
   operations: ModifyInventoryAction[];
 }
 
-export interface MarketplaceListing {
-  cardId: string;
+// Marketplace Types
+export type ListingType = 'card' | 'pack';
+
+export interface CardListing {
+  type: 'card';
   cardName: string;
+  cardId: string;
   cardLevel: number;
   cardVariant: string;
   sellerId: string;
   sellerUsername: string;
+  slot: number;
   cost: number;
-  listedAt: string;
+  timestamp: string;
+}
+
+export interface PackListing {
+  type: 'pack';
+  packName: string;
+  sellerId: string;
+  sellerUsername: string;
+  slot: number;
+  cost: number;
+  timestamp: string;
+}
+
+export type MarketplaceListing = CardListing | PackListing;
+
+export interface UserSlots {
+  slots: Record<number, MarketplaceListing | null>;
+}
+
+export interface RapRecord {
+  rap: number;
+  lastUpdated: string;
+  lastSnapshotDate?: string;
+}
+
+export interface RapHistoryEntry {
+  date: string;
+  rap: number;
+}
+
+export interface ItemRapData {
+  rap: number;
+  history: RapHistoryEntry[];
+}
+
+export interface MarketplaceHistoryResponse {
+  cards: Record<string, ItemRapData>;
+  packs: Record<string, ItemRapData>;
 }

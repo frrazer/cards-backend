@@ -14,10 +14,6 @@ Globals:
     MemorySize: 128
     Runtime: nodejs20.x
     Architectures: [arm64]
-    LoggingConfig:
-      LogFormat: JSON
-      ApplicationLogLevel: INFO
-      SystemLogLevel: INFO
     Environment:
       Variables:
         NODE_ENV: !Ref Env
@@ -229,7 +225,7 @@ Resources:
   # POST /marketplace/buy [AUTH REQUIRED]
   MarketplaceBuyFunction:
     Type: AWS::Serverless::Function
-    Description: Purchases a card from the marketplace, transferring it to the buyer
+    Description: Purchases a card or pack from the marketplace
     Timeout: 10
     MemorySize: 256
     Metadata:
@@ -256,12 +252,41 @@ Resources:
             Auth:
               Authorizer: ApiAuthorizer
 
-  # GET /marketplace/listings
+  # GET /marketplace/history
+  MarketplaceGetHistoryFunction:
+    Type: AWS::Serverless::Function
+    Description: Get RAP history for all cards and packs with marketplace activity
+    Timeout: 10
+    MemorySize: 256
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/marketplaceGetHistory.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/marketplaceGetHistory.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /marketplace/history
+            Method: get
+
+
+  # GET /marketplace/listings/{userId}
   MarketplaceGetListingsFunction:
     Type: AWS::Serverless::Function
-    Description: Get 100 cheapest marketplace listings, optionally filtered by card name and level
-    Timeout: 5
-    MemorySize: 256
+    Description: Get all marketplace listings for a specific user
+    Timeout: 3
+    MemorySize: 128
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -281,14 +306,14 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref MyApi
-            Path: /marketplace/listings
+            Path: /marketplace/listings/{userId}
             Method: get
 
 
   # POST /marketplace/list [AUTH REQUIRED]
   MarketplaceListFunction:
     Type: AWS::Serverless::Function
-    Description: Lists a card for sale on the marketplace
+    Description: Lists a card or pack for sale on the marketplace (max 4 slots per user)
     Timeout: 5
     MemorySize: 256
     Metadata:
@@ -318,7 +343,7 @@ Resources:
   # POST /marketplace/unlist [AUTH REQUIRED]
   MarketplaceUnlistFunction:
     Type: AWS::Serverless::Function
-    Description: Unlists a card from the marketplace
+    Description: Unlists an item from the marketplace by slot
     Timeout: 5
     MemorySize: 256
     Metadata:
