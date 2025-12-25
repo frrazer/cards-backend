@@ -1,7 +1,7 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
 import { buildResponse } from '../utils/response';
 import { db } from '../utils/db';
-import { PackListing } from '../types/inventory';
+import { PackListing, MarketplaceListing } from '../types/inventory';
 
 interface UnlistCardRequest {
   type: 'card';
@@ -16,6 +16,25 @@ interface UnlistPackRequest {
 }
 
 type UnlistRequest = UnlistCardRequest | UnlistPackRequest;
+
+async function getUserListings(userId: string): Promise<MarketplaceListing[]> {
+  const userListingsResult = await db.query(`USER_LISTINGS#${userId}`);
+  if (userListingsResult.items.length === 0) return [];
+
+  const listingKeys = userListingsResult.items.map(item => {
+    const sk = item.sk as string;
+    if (sk.startsWith('CARD#')) {
+      return { pk: `LISTING#CARD#${sk.replace('CARD#', '')}`, sk: 'LISTING' };
+    } else {
+      return { pk: `LISTING#PACK#${sk.replace('PACK#', '')}`, sk: 'LISTING' };
+    }
+  });
+
+  const listingItems = await db.batchGet(listingKeys);
+  return listingItems
+    .map(item => item as unknown as MarketplaceListing)
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+}
 
 /**
  * @route POST /marketplace/unlist
@@ -151,7 +170,6 @@ export const handler: APIGatewayProxyHandler = async event => {
           sk: `PACK#${listingId}`,
         });
 
-        // Return pack to inventory
         const inventoryItem = await db.get(`USER#${userId}`, 'INVENTORY');
 
         if (inventoryItem) {
@@ -191,10 +209,17 @@ export const handler: APIGatewayProxyHandler = async event => {
 
       await db.transactWrite(operations);
 
+      // Fetch updated listings
+      const updatedListings = await getUserListings(userId);
+
       return buildResponse(200, {
         success: true,
         message: `${type === 'card' ? 'Card' : 'Pack'} unlisted successfully`,
-        data: { type },
+        data: {
+          type,
+          listings: updatedListings,
+          listingsCount: updatedListings.length,
+        },
       });
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'TransactionCanceledException') {

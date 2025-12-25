@@ -1,7 +1,7 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
 import { buildResponse } from '../utils/response';
 import { db } from '../utils/db';
-import { InventoryCard, CardListing, PackListing, RapRecord } from '../types/inventory';
+import { InventoryCard, CardListing, PackListing, MarketplaceListing, RapRecord } from '../types/inventory';
 
 interface BuyCardRequest {
   type: 'card';
@@ -19,10 +19,36 @@ interface BuyPackRequest {
 
 type BuyRequest = BuyCardRequest | BuyPackRequest;
 
+interface InventoryData {
+  userId: string;
+  packs: Record<string, number>;
+  cards: InventoryCard[];
+  version: number;
+}
+
 const calculateNewRap = (currentRap: number | undefined, salePrice: number): number => {
   if (currentRap === undefined) return salePrice;
   return currentRap + (salePrice - currentRap) / 10;
 };
+
+async function getUserListings(userId: string): Promise<MarketplaceListing[]> {
+  const userListingsResult = await db.query(`USER_LISTINGS#${userId}`);
+  if (userListingsResult.items.length === 0) return [];
+
+  const listingKeys = userListingsResult.items.map(item => {
+    const sk = item.sk as string;
+    if (sk.startsWith('CARD#')) {
+      return { pk: `LISTING#CARD#${sk.replace('CARD#', '')}`, sk: 'LISTING' };
+    } else {
+      return { pk: `LISTING#PACK#${sk.replace('PACK#', '')}`, sk: 'LISTING' };
+    }
+  });
+
+  const listingItems = await db.batchGet(listingKeys);
+  return listingItems
+    .map(item => item as unknown as MarketplaceListing)
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+}
 
 /**
  * @route POST /marketplace/buy
@@ -223,6 +249,7 @@ async function handleCardPurchase(request: BuyCardRequest) {
     },
   ];
 
+  const newBuyerVersion = buyerVersion + 1;
   if (buyerInventoryItem) {
     operations.push({
       type: 'Update',
@@ -231,7 +258,7 @@ async function handleCardPurchase(request: BuyCardRequest) {
       updates: {
         cards: updatedBuyerCards,
         packs: buyerPacks,
-        version: buyerVersion + 1,
+        version: newBuyerVersion,
         updatedAt: timestamp,
       },
       condition: '#version = :expectedVersion',
@@ -289,6 +316,23 @@ async function handleCardPurchase(request: BuyCardRequest) {
 
   await db.transactWrite(operations);
 
+  // Fetch updated data for response
+  const [sellerListings] = await Promise.all([getUserListings(listing.sellerId)]);
+
+  const sellerInventory: InventoryData = {
+    userId: listing.sellerId,
+    packs: sellerPacks,
+    cards: updatedSellerCards,
+    version: sellerVersion + 1,
+  };
+
+  const buyerInventory: InventoryData = {
+    userId: buyerId,
+    packs: buyerInventoryItem ? buyerPacks : {},
+    cards: updatedBuyerCards,
+    version: buyerInventoryItem ? newBuyerVersion : 1,
+  };
+
   return buildResponse(200, {
     success: true,
     message: 'Card purchase successful',
@@ -296,8 +340,10 @@ async function handleCardPurchase(request: BuyCardRequest) {
       type: 'card',
       card: { ...card, level: card.level ?? listing.cardLevel },
       cost: listing.cost,
-      sellerId: listing.sellerId,
       newRap,
+      sellerInventory,
+      buyerInventory,
+      sellerListings,
     },
   });
 }
@@ -361,6 +407,7 @@ async function handlePackPurchase(request: BuyPackRequest) {
     },
   ];
 
+  const newBuyerVersion = buyerVersion + 1;
   if (buyerInventoryItem) {
     operations.push({
       type: 'Update',
@@ -369,7 +416,7 @@ async function handlePackPurchase(request: BuyPackRequest) {
       updates: {
         cards: buyerCards,
         packs: updatedBuyerPacks,
-        version: buyerVersion + 1,
+        version: newBuyerVersion,
         updatedAt: timestamp,
       },
       condition: '#version = :expectedVersion',
@@ -427,6 +474,28 @@ async function handlePackPurchase(request: BuyPackRequest) {
 
   await db.transactWrite(operations);
 
+  // Fetch updated data for response
+  const [sellerListings, sellerInventoryItem] = await Promise.all([
+    getUserListings(listing.sellerId),
+    db.get(`USER#${listing.sellerId}`, 'INVENTORY'),
+  ]);
+
+  const sellerInventory: InventoryData = sellerInventoryItem
+    ? {
+        userId: listing.sellerId,
+        packs: (sellerInventoryItem.packs as Record<string, number>) || {},
+        cards: (sellerInventoryItem.cards as InventoryCard[]) || [],
+        version: (sellerInventoryItem.version as number) || 0,
+      }
+    : { userId: listing.sellerId, packs: {}, cards: [], version: 0 };
+
+  const buyerInventory: InventoryData = {
+    userId: buyerId,
+    packs: updatedBuyerPacks,
+    cards: buyerCards,
+    version: buyerInventoryItem ? newBuyerVersion : 1,
+  };
+
   return buildResponse(200, {
     success: true,
     message: 'Pack purchase successful',
@@ -435,8 +504,10 @@ async function handlePackPurchase(request: BuyPackRequest) {
       packName: listing.packName,
       listingId,
       cost: listing.cost,
-      sellerId: listing.sellerId,
       newRap,
+      sellerInventory,
+      buyerInventory,
+      sellerListings,
     },
   });
 }

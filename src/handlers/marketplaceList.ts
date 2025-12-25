@@ -24,12 +24,31 @@ type ListRequest = ListCardRequest | ListPackRequest;
 
 const MAX_LISTINGS = 256;
 
+async function getUserListings(userId: string): Promise<MarketplaceListing[]> {
+  const userListingsResult = await db.query(`USER_LISTINGS#${userId}`);
+  if (userListingsResult.items.length === 0) return [];
+
+  const listingKeys = userListingsResult.items.map(item => {
+    const sk = item.sk as string;
+    if (sk.startsWith('CARD#')) {
+      return { pk: `LISTING#CARD#${sk.replace('CARD#', '')}`, sk: 'LISTING' };
+    } else {
+      return { pk: `LISTING#PACK#${sk.replace('PACK#', '')}`, sk: 'LISTING' };
+    }
+  });
+
+  const listingItems = await db.batchGet(listingKeys);
+  return listingItems
+    .map(item => item as unknown as MarketplaceListing)
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+}
+
 /**
  * @route POST /marketplace/list
  * @auth
  * @timeout 5
  * @memory 256
- * @description Lists a card or pack for sale on the marketplace (max 50 per user)
+ * @description Lists a card or pack for sale on the marketplace (max 256 per user)
  */
 export const handler: APIGatewayProxyHandler = async event => {
   if (!event.body) {
@@ -96,7 +115,6 @@ export const handler: APIGatewayProxyHandler = async event => {
   const MAX_RETRIES = 5;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      // Get user's current listing count and inventory
       const [userListingsResult, inventoryItem] = await Promise.all([
         db.query(`USER_LISTINGS#${userId}`),
         db.get(`USER#${userId}`, 'INVENTORY'),
@@ -212,7 +230,6 @@ export const handler: APIGatewayProxyHandler = async event => {
           condition: 'attribute_not_exists(pk)',
         });
 
-        // Decrement pack from inventory
         const inventoryVersion = (inventoryItem.version as number) || 0;
         const updatedPacks = { ...packs, [packName]: packs[packName] - 1 };
         if (updatedPacks[packName] === 0) delete updatedPacks[packName];
@@ -234,10 +251,17 @@ export const handler: APIGatewayProxyHandler = async event => {
 
       await db.transactWrite(operations);
 
+      // Fetch updated listings
+      const updatedListings = await getUserListings(userId);
+
       return buildResponse(200, {
         success: true,
         message: `${type === 'card' ? 'Card' : 'Pack'} listed successfully`,
-        data: listing,
+        data: {
+          listing,
+          listings: updatedListings,
+          listingsCount: updatedListings.length,
+        },
       });
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'TransactionCanceledException') {

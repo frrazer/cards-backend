@@ -313,7 +313,7 @@ Resources:
   # POST /marketplace/list [AUTH REQUIRED]
   MarketplaceListFunction:
     Type: AWS::Serverless::Function
-    Description: Lists a card or pack for sale on the marketplace (max 50 per user)
+    Description: Lists a card or pack for sale on the marketplace (max 256 per user)
     Timeout: 5
     MemorySize: 256
     Metadata:

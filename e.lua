@@ -27,7 +27,7 @@ local AWS_DATA = {
 	DEV_UNIVERSE_ID = 9140515237
 }
 
-local MAX_RPM = 400
+local MAX_RPM = 420
 local requestTimes = {}
 local function Request(data: {
 	path: string,
@@ -67,9 +67,6 @@ local function Request(data: {
 			Headers = headers,
 			Body = data.body
 		})
-
-
-		warn(`res`, response)
 
 		if (not response.Success) then return response.StatusCode, response.Body end
 		local body; pcall(function()
@@ -500,7 +497,24 @@ function Service:BuyCard(player, cardId, expectedCost)
 	})
 
 	if not success or code ~= 200 then return false, body end
-	self:ReconcileFromBackend(profile, nil, player)
+
+	-- Reconcile buyer inventory
+	if body.data.buyerInventory then
+		self:ReconcileFromBackend(profile, body.data.buyerInventory, player)
+	end
+
+	-- Reconcile seller inventory if online
+	if body.data.sellerInventory then
+		local sellerId = tonumber(body.data.sellerInventory.userId)
+		local sellerPlayer = sellerId and Players:GetPlayerByUserId(sellerId)
+		if sellerPlayer then
+			local sellerProfile = GetProfile(sellerPlayer)
+			if sellerProfile then
+				self:ReconcileFromBackend(sellerProfile, body.data.sellerInventory, sellerPlayer)
+			end
+		end
+	end
+
 	return true, body.data
 end
 
@@ -521,7 +535,24 @@ function Service:BuyPack(player, listingId, expectedCost)
 	})
 
 	if not success or code ~= 200 then return false, body end
-	self:ReconcileFromBackend(profile, nil, player)
+
+	-- Reconcile buyer inventory
+	if body.data.buyerInventory then
+		self:ReconcileFromBackend(profile, body.data.buyerInventory, player)
+	end
+
+	-- Reconcile seller inventory if online
+	if body.data.sellerInventory then
+		local sellerId = tonumber(body.data.sellerInventory.userId)
+		local sellerPlayer = sellerId and Players:GetPlayerByUserId(sellerId)
+		if sellerPlayer then
+			local sellerProfile = GetProfile(sellerPlayer)
+			if sellerProfile then
+				self:ReconcileFromBackend(sellerProfile, body.data.sellerInventory, sellerPlayer)
+			end
+		end
+	end
+
 	return true, body.data
 end
 
