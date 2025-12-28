@@ -21,7 +21,6 @@ export const handler: APIGatewayProxyHandler = async event => {
   }
 
   try {
-    // Query all user's listing index entries
     const userListingsResult = await db.query(`USER_LISTINGS#${userId}`);
 
     if (userListingsResult.items.length === 0) {
@@ -35,7 +34,6 @@ export const handler: APIGatewayProxyHandler = async event => {
       });
     }
 
-    // Batch get all actual listings
     const listingKeys = userListingsResult.items.map(item => {
       const sk = item.sk as string;
       if (sk.startsWith('CARD#')) {

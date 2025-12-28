@@ -179,41 +179,27 @@ async function handleCardPurchase(request: BuyCardRequest) {
     });
   }
 
+  // Card is already removed from seller inventory when listed
+  // Reconstruct card from listing data
+  const card: InventoryCard = {
+    cardId: listing.cardId,
+    cardName: listing.cardName,
+    level: listing.cardLevel,
+    variant: listing.cardVariant,
+  };
+
   const [sellerInventoryItem, buyerInventoryItem, rapItem] = await Promise.all([
     db.get(`USER#${listing.sellerId}`, 'INVENTORY'),
     db.get(`USER#${buyerId}`, 'INVENTORY'),
     db.get(`RAP#CARD#${listing.cardName}`, 'CURRENT'),
   ]);
 
-  if (!sellerInventoryItem) {
-    return buildResponse(404, {
-      success: false,
-      error: 'Not Found',
-      message: 'Seller inventory not found',
-    });
-  }
-
-  const sellerCards = (sellerInventoryItem.cards as InventoryCard[]) || [];
-  const cardIndex = sellerCards.findIndex(c => c.cardId === cardId);
-
-  if (cardIndex === -1) {
-    await cleanupCardListing(listing);
-    return buildResponse(410, {
-      success: false,
-      error: 'Gone',
-      message: 'Card no longer exists in seller inventory. Listing has been removed.',
-    });
-  }
-
-  const card = sellerCards[cardIndex];
-  const sellerVersion = (sellerInventoryItem.version as number) || 0;
+  const sellerVersion = (sellerInventoryItem?.version as number) || 0;
+  const sellerCards = (sellerInventoryItem?.cards as InventoryCard[]) || [];
+  const sellerPacks = (sellerInventoryItem?.packs as Record<string, number>) || {};
   const buyerVersion = (buyerInventoryItem?.version as number) || 0;
   const buyerCards = (buyerInventoryItem?.cards as InventoryCard[]) || [];
   const buyerPacks = (buyerInventoryItem?.packs as Record<string, number>) || {};
-  const sellerPacks = (sellerInventoryItem.packs as Record<string, number>) || {};
-
-  const updatedSellerCards = [...sellerCards];
-  updatedSellerCards.splice(cardIndex, 1);
   const updatedBuyerCards = [...buyerCards, card];
 
   const timestamp = new Date().toISOString();
@@ -232,20 +218,6 @@ async function handleCardPurchase(request: BuyCardRequest) {
       type: 'Delete',
       pk: `USER_LISTINGS#${listing.sellerId}`,
       sk: `CARD#${cardId}`,
-    },
-    {
-      type: 'Update',
-      pk: `USER#${listing.sellerId}`,
-      sk: 'INVENTORY',
-      updates: {
-        cards: updatedSellerCards,
-        packs: sellerPacks,
-        version: sellerVersion + 1,
-        updatedAt: timestamp,
-      },
-      condition: '#version = :expectedVersion',
-      conditionNames: { '#version': 'version' },
-      conditionValues: { ':expectedVersion': sellerVersion },
     },
   ];
 
@@ -317,13 +289,13 @@ async function handleCardPurchase(request: BuyCardRequest) {
   await db.transactWrite(operations);
 
   // Fetch updated data for response
-  const [sellerListings] = await Promise.all([getUserListings(listing.sellerId)]);
+  const sellerListings = await getUserListings(listing.sellerId);
 
   const sellerInventory: InventoryData = {
     userId: listing.sellerId,
     packs: sellerPacks,
-    cards: updatedSellerCards,
-    version: sellerVersion + 1,
+    cards: sellerCards,
+    version: sellerVersion,
   };
 
   const buyerInventory: InventoryData = {
@@ -338,7 +310,7 @@ async function handleCardPurchase(request: BuyCardRequest) {
     message: 'Card purchase successful',
     data: {
       type: 'card',
-      card: { ...card, level: card.level ?? listing.cardLevel },
+      card,
       cost: listing.cost,
       newRap,
       sellerInventory,
@@ -510,17 +482,4 @@ async function handlePackPurchase(request: BuyPackRequest) {
       sellerListings,
     },
   });
-}
-
-async function cleanupCardListing(listing: CardListing) {
-  const operations: Parameters<typeof db.transactWrite>[0] = [
-    { type: 'Delete', pk: `LISTING#CARD#${listing.cardId}`, sk: 'LISTING' },
-    { type: 'Delete', pk: `USER_LISTINGS#${listing.sellerId}`, sk: `CARD#${listing.cardId}` },
-  ];
-
-  try {
-    await db.transactWrite(operations);
-  } catch (error) {
-    console.warn('Failed to cleanup orphan listing:', error);
-  }
 }

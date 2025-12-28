@@ -1,7 +1,7 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
 import { buildResponse } from '../utils/response';
 import { db } from '../utils/db';
-import { PackListing, MarketplaceListing } from '../types/inventory';
+import { InventoryCard, CardListing, PackListing, MarketplaceListing } from '../types/inventory';
 
 interface UnlistCardRequest {
   type: 'card';
@@ -103,6 +103,13 @@ export const handler: APIGatewayProxyHandler = async event => {
       const timestamp = new Date().toISOString();
       const operations: Parameters<typeof db.transactWrite>[0] = [];
 
+      const inventoryItem = await db.get(`USER#${userId}`, 'INVENTORY');
+      const inventoryVersion = (inventoryItem?.version as number) || 0;
+      const cards = (inventoryItem?.cards as InventoryCard[]) || [];
+      const packs = (inventoryItem?.packs as Record<string, number>) || {};
+      let updatedCards = cards;
+      let updatedPacks = packs;
+
       if (type === 'card') {
         const cardId = (request as UnlistCardRequest).cardId;
 
@@ -115,13 +122,24 @@ export const handler: APIGatewayProxyHandler = async event => {
           });
         }
 
-        if (listingItem.sellerId !== userId) {
+        const listing = listingItem as unknown as CardListing;
+
+        if (listing.sellerId !== userId) {
           return buildResponse(403, {
             success: false,
             error: 'Forbidden',
             message: 'You can only unlist your own items',
           });
         }
+
+        // Reconstruct card from listing data
+        const card: InventoryCard = {
+          cardId: listing.cardId,
+          cardName: listing.cardName,
+          level: listing.cardLevel,
+          variant: listing.cardVariant,
+        };
+        updatedCards = [...cards, card];
 
         operations.push({
           type: 'Delete',
@@ -135,6 +153,37 @@ export const handler: APIGatewayProxyHandler = async event => {
           pk: `USER_LISTINGS#${userId}`,
           sk: `CARD#${cardId}`,
         });
+
+        if (inventoryItem) {
+          operations.push({
+            type: 'Update',
+            pk: `USER#${userId}`,
+            sk: 'INVENTORY',
+            updates: {
+              cards: updatedCards,
+              packs: updatedPacks,
+              version: inventoryVersion + 1,
+              updatedAt: timestamp,
+            },
+            condition: '#version = :expectedVersion',
+            conditionNames: { '#version': 'version' },
+            conditionValues: { ':expectedVersion': inventoryVersion },
+          });
+        } else {
+          operations.push({
+            type: 'Put',
+            pk: `USER#${userId}`,
+            sk: 'INVENTORY',
+            item: {
+              userId,
+              cards: [card],
+              packs: {},
+              version: 1,
+              updatedAt: timestamp,
+            },
+            condition: 'attribute_not_exists(pk)',
+          });
+        }
       } else {
         const listingId = (request as UnlistPackRequest).listingId;
 
@@ -157,6 +206,8 @@ export const handler: APIGatewayProxyHandler = async event => {
           });
         }
 
+        updatedPacks = { ...packs, [listing.packName]: (packs[listing.packName] || 0) + 1 };
+
         operations.push({
           type: 'Delete',
           pk: `LISTING#PACK#${listingId}`,
@@ -170,18 +221,13 @@ export const handler: APIGatewayProxyHandler = async event => {
           sk: `PACK#${listingId}`,
         });
 
-        const inventoryItem = await db.get(`USER#${userId}`, 'INVENTORY');
-
         if (inventoryItem) {
-          const packs = (inventoryItem.packs as Record<string, number>) || {};
-          const inventoryVersion = (inventoryItem.version as number) || 0;
-          const updatedPacks = { ...packs, [listing.packName]: (packs[listing.packName] || 0) + 1 };
-
           operations.push({
             type: 'Update',
             pk: `USER#${userId}`,
             sk: 'INVENTORY',
             updates: {
+              cards: updatedCards,
               packs: updatedPacks,
               version: inventoryVersion + 1,
               updatedAt: timestamp,
@@ -219,6 +265,12 @@ export const handler: APIGatewayProxyHandler = async event => {
           type,
           listings: updatedListings,
           listingsCount: updatedListings.length,
+          sellerInventory: {
+            userId,
+            cards: updatedCards,
+            packs: updatedPacks,
+            version: inventoryItem ? inventoryVersion + 1 : 1,
+          },
         },
       });
     } catch (error: unknown) {

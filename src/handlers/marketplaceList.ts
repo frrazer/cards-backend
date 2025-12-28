@@ -141,12 +141,17 @@ export const handler: APIGatewayProxyHandler = async event => {
       let listing: MarketplaceListing;
       const operations: Parameters<typeof db.transactWrite>[0] = [];
 
+      const inventoryVersion = (inventoryItem.version as number) || 0;
+      const cards = (inventoryItem.cards as InventoryCard[]) || [];
+      const packs = (inventoryItem.packs as Record<string, number>) || {};
+      let updatedCards = cards;
+      let updatedPacks = packs;
+
       if (type === 'card') {
         const cardId = (request as ListCardRequest).cardId;
-        const cards = (inventoryItem.cards as InventoryCard[]) || [];
-        const card = cards.find(c => c.cardId === cardId);
+        const cardIndex = cards.findIndex(c => c.cardId === cardId);
 
-        if (!card) {
+        if (cardIndex === -1) {
           return buildResponse(404, {
             success: false,
             error: 'Not Found',
@@ -162,6 +167,10 @@ export const handler: APIGatewayProxyHandler = async event => {
             message: 'This card is already listed on the marketplace',
           });
         }
+
+        const card = cards[cardIndex];
+        updatedCards = [...cards];
+        updatedCards.splice(cardIndex, 1);
 
         listing = {
           type: 'card',
@@ -190,9 +199,23 @@ export const handler: APIGatewayProxyHandler = async event => {
           item: { cardId, type: 'card' },
           condition: 'attribute_not_exists(pk)',
         });
+
+        operations.push({
+          type: 'Update',
+          pk: `USER#${userId}`,
+          sk: 'INVENTORY',
+          updates: {
+            cards: updatedCards,
+            packs: updatedPacks,
+            version: inventoryVersion + 1,
+            updatedAt: timestamp,
+          },
+          condition: '#version = :expectedVersion',
+          conditionNames: { '#version': 'version' },
+          conditionValues: { ':expectedVersion': inventoryVersion },
+        });
       } else {
         const packName = (request as ListPackRequest).packName;
-        const packs = (inventoryItem.packs as Record<string, number>) || {};
 
         if (!packs[packName] || packs[packName] < 1) {
           return buildResponse(404, {
@@ -203,6 +226,8 @@ export const handler: APIGatewayProxyHandler = async event => {
         }
 
         const listingId = randomUUID();
+        updatedPacks = { ...packs, [packName]: packs[packName] - 1 };
+        if (updatedPacks[packName] === 0) delete updatedPacks[packName];
 
         listing = {
           type: 'pack',
@@ -230,15 +255,12 @@ export const handler: APIGatewayProxyHandler = async event => {
           condition: 'attribute_not_exists(pk)',
         });
 
-        const inventoryVersion = (inventoryItem.version as number) || 0;
-        const updatedPacks = { ...packs, [packName]: packs[packName] - 1 };
-        if (updatedPacks[packName] === 0) delete updatedPacks[packName];
-
         operations.push({
           type: 'Update',
           pk: `USER#${userId}`,
           sk: 'INVENTORY',
           updates: {
+            cards: updatedCards,
             packs: updatedPacks,
             version: inventoryVersion + 1,
             updatedAt: timestamp,
@@ -261,6 +283,12 @@ export const handler: APIGatewayProxyHandler = async event => {
           listing,
           listings: updatedListings,
           listingsCount: updatedListings.length,
+          sellerInventory: {
+            userId,
+            cards: updatedCards,
+            packs: updatedPacks,
+            version: inventoryVersion + 1,
+          },
         },
       });
     } catch (error: unknown) {
