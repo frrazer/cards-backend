@@ -1,7 +1,11 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
-import { buildResponse } from '../utils/response';
+import { badRequest, notFound, conflict, success } from '../utils/response';
+import { parseBody } from '../utils/request';
+import { withRetry } from '../utils/retry';
 import { db } from '../utils/db';
-import { InventoryCard, CardListing, PackListing, MarketplaceListing, RapRecord } from '../types/inventory';
+import { getUserListings, calculateNewRap } from '../utils/marketplace';
+import { parseInventoryItem, reconstructCard } from '../utils/inventory';
+import { CardListing, PackListing, RapRecord } from '../types/inventory';
 
 interface BuyCardRequest {
   type: 'card';
@@ -19,37 +23,6 @@ interface BuyPackRequest {
 
 type BuyRequest = BuyCardRequest | BuyPackRequest;
 
-interface InventoryData {
-  userId: string;
-  packs: Record<string, number>;
-  cards: InventoryCard[];
-  version: number;
-}
-
-const calculateNewRap = (currentRap: number | undefined, salePrice: number): number => {
-  if (currentRap === undefined) return salePrice;
-  return currentRap + (salePrice - currentRap) / 10;
-};
-
-async function getUserListings(userId: string): Promise<MarketplaceListing[]> {
-  const userListingsResult = await db.query(`USER_LISTINGS#${userId}`);
-  if (userListingsResult.items.length === 0) return [];
-
-  const listingKeys = userListingsResult.items.map(item => {
-    const sk = item.sk as string;
-    if (sk.startsWith('CARD#')) {
-      return { pk: `LISTING#CARD#${sk.replace('CARD#', '')}`, sk: 'LISTING' };
-    } else {
-      return { pk: `LISTING#PACK#${sk.replace('PACK#', '')}`, sk: 'LISTING' };
-    }
-  });
-
-  const listingItems = await db.batchGet(listingKeys);
-  return listingItems
-    .map(item => item as unknown as MarketplaceListing)
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-}
-
 /**
  * @route POST /marketplace/buy
  * @auth
@@ -58,135 +31,53 @@ async function getUserListings(userId: string): Promise<MarketplaceListing[]> {
  * @description Purchases a card or pack from the marketplace
  */
 export const handler: APIGatewayProxyHandler = async event => {
-  if (!event.body) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Request body is required',
-    });
-  }
+  const parsed = parseBody<BuyRequest>(event.body);
+  if (!parsed.success) return parsed.response;
 
-  let request: BuyRequest;
-  try {
-    request = JSON.parse(event.body) as BuyRequest;
-  } catch {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Invalid JSON in request body',
-    });
-  }
-
-  const { type, buyerId, expectedCost } = request;
+  const { type, buyerId, expectedCost } = parsed.data;
 
   if (!type || !buyerId || expectedCost === undefined) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'type, buyerId, and expectedCost are required',
-    });
+    return badRequest('type, buyerId, and expectedCost are required');
   }
 
   if (type !== 'card' && type !== 'pack') {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'type must be "card" or "pack"',
-    });
+    return badRequest('type must be "card" or "pack"');
   }
 
-  if (type === 'card' && !('cardId' in request && request.cardId)) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'cardId is required for card purchases',
-    });
+  if (type === 'card' && !('cardId' in parsed.data && parsed.data.cardId)) {
+    return badRequest('cardId is required for card purchases');
   }
 
-  if (type === 'pack' && !('listingId' in request && request.listingId)) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'listingId is required for pack purchases',
-    });
+  if (type === 'pack' && !('listingId' in parsed.data && parsed.data.listingId)) {
+    return badRequest('listingId is required for pack purchases');
   }
 
-  const MAX_RETRIES = 5;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      if (type === 'card') {
-        return await handleCardPurchase(request as BuyCardRequest);
-      } else {
-        return await handlePackPurchase(request as BuyPackRequest);
-      }
-    } catch (error: unknown) {
-      if (error instanceof Error && error.name === 'TransactionCanceledException') {
-        console.log(`Transaction conflict on attempt ${attempt + 1}, retrying...`);
-        if (attempt === MAX_RETRIES - 1) {
-          return buildResponse(409, {
-            success: false,
-            error: 'Conflict',
-            message: 'Purchase failed due to concurrent modification. Please retry.',
-          });
-        }
-        await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
-        continue;
-      }
-
-      console.error('Error buying item:', error);
-      return buildResponse(500, {
-        success: false,
-        error: 'Internal Server Error',
-        message: 'Failed to complete purchase',
-      });
-    }
-  }
-
-  return buildResponse(500, {
-    success: false,
-    error: 'Internal Server Error',
-    message: 'Max retries exceeded',
-  });
+  return withRetry(
+    async () =>
+      type === 'card'
+        ? handleCardPurchase(parsed.data as BuyCardRequest)
+        : handlePackPurchase(parsed.data as BuyPackRequest),
+    { baseDelayMs: 100, conflictMessage: 'Purchase failed due to concurrent modification. Please retry.' },
+  );
 };
 
 async function handleCardPurchase(request: BuyCardRequest) {
   const { buyerId, cardId, expectedCost } = request;
 
   const listingItem = await db.get(`LISTING#CARD#${cardId}`, 'LISTING');
-  if (!listingItem) {
-    return buildResponse(404, {
-      success: false,
-      error: 'Not Found',
-      message: 'Listing not found or already sold',
-    });
-  }
+  if (!listingItem) return notFound('Listing not found or already sold');
 
   const listing = listingItem as unknown as CardListing;
 
   if (listing.cost !== expectedCost) {
-    return buildResponse(409, {
-      success: false,
-      error: 'Conflict',
-      message: `Price changed. Expected ${expectedCost}, actual ${listing.cost}`,
-    });
+    return conflict(`Price changed. Expected ${expectedCost}, actual ${listing.cost}`);
   }
 
   if (listing.sellerId === buyerId) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Cannot buy your own listing',
-    });
+    return badRequest('Cannot buy your own listing');
   }
 
-  // Card is already removed from seller inventory when listed
-  // Reconstruct card from listing data
-  const card: InventoryCard = {
-    cardId: listing.cardId,
-    cardName: listing.cardName,
-    level: listing.cardLevel,
-    variant: listing.cardVariant,
-  };
+  const card = reconstructCard(listing);
 
   const [sellerInventoryItem, buyerInventoryItem, rapItem] = await Promise.all([
     db.get(`USER#${listing.sellerId}`, 'INVENTORY'),
@@ -194,61 +85,36 @@ async function handleCardPurchase(request: BuyCardRequest) {
     db.get(`RAP#CARD#${listing.cardName}`, 'CURRENT'),
   ]);
 
-  const sellerVersion = (sellerInventoryItem?.version as number) || 0;
-  const sellerCards = (sellerInventoryItem?.cards as InventoryCard[]) || [];
-  const sellerPacks = (sellerInventoryItem?.packs as Record<string, number>) || {};
-  const buyerVersion = (buyerInventoryItem?.version as number) || 0;
-  const buyerCards = (buyerInventoryItem?.cards as InventoryCard[]) || [];
-  const buyerPacks = (buyerInventoryItem?.packs as Record<string, number>) || {};
-  const updatedBuyerCards = [...buyerCards, card];
+  const seller = parseInventoryItem(listing.sellerId, sellerInventoryItem);
+  const buyer = parseInventoryItem(buyerId, buyerInventoryItem);
+  const updatedBuyerCards = [...buyer.cards, card];
 
   const timestamp = new Date().toISOString();
-
-  const currentRap = (rapItem as RapRecord)?.rap;
-  const newRap = calculateNewRap(currentRap, listing.cost);
+  const newRap = calculateNewRap((rapItem as RapRecord)?.rap, listing.cost);
 
   const operations: Parameters<typeof db.transactWrite>[0] = [
-    {
-      type: 'Delete',
-      pk: `LISTING#CARD#${cardId}`,
-      sk: 'LISTING',
-      condition: 'attribute_exists(pk)',
-    },
-    {
-      type: 'Delete',
-      pk: `USER_LISTINGS#${listing.sellerId}`,
-      sk: `CARD#${cardId}`,
-    },
+    { type: 'Delete', pk: `LISTING#CARD#${cardId}`, sk: 'LISTING', condition: 'attribute_exists(pk)' },
+    { type: 'Delete', pk: `USER_LISTINGS#${listing.sellerId}`, sk: `CARD#${cardId}` },
+    { type: 'Delete', pk: `ITEM_LISTINGS#CARD#${listing.cardName}`, sk: cardId },
   ];
 
-  const newBuyerVersion = buyerVersion + 1;
-  if (buyerInventoryItem) {
+  const newBuyerVersion = buyer.version + 1;
+  if (buyer.exists) {
     operations.push({
       type: 'Update',
       pk: `USER#${buyerId}`,
       sk: 'INVENTORY',
-      updates: {
-        cards: updatedBuyerCards,
-        packs: buyerPacks,
-        version: newBuyerVersion,
-        updatedAt: timestamp,
-      },
+      updates: { cards: updatedBuyerCards, packs: buyer.packs, version: newBuyerVersion, updatedAt: timestamp },
       condition: '#version = :expectedVersion',
       conditionNames: { '#version': 'version' },
-      conditionValues: { ':expectedVersion': buyerVersion },
+      conditionValues: { ':expectedVersion': buyer.version },
     });
   } else {
     operations.push({
       type: 'Put',
       pk: `USER#${buyerId}`,
       sk: 'INVENTORY',
-      item: {
-        userId: buyerId,
-        cards: [card],
-        packs: {},
-        version: 1,
-        updatedAt: timestamp,
-      },
+      item: { userId: buyerId, cards: [card], packs: {}, version: 1, updatedAt: timestamp },
       condition: 'attribute_not_exists(pk)',
     });
   }
@@ -258,96 +124,61 @@ async function handleCardPurchase(request: BuyCardRequest) {
       type: 'Update',
       pk: `RAP#CARD#${listing.cardName}`,
       sk: 'CURRENT',
-      updates: {
-        rap: newRap,
-        lastUpdated: timestamp,
-      },
+      updates: { rap: newRap, lastUpdated: timestamp },
     });
   } else {
     operations.push({
       type: 'Put',
       pk: `RAP#CARD#${listing.cardName}`,
       sk: 'CURRENT',
-      item: {
-        rap: newRap,
-        lastUpdated: timestamp,
-      },
+      item: { rap: newRap, lastUpdated: timestamp },
     });
     operations.push({
       type: 'Put',
       pk: 'RAP_REGISTRY',
       sk: `CARD#${listing.cardName}`,
-      item: {
-        itemType: 'card',
-        itemName: listing.cardName,
-        createdAt: timestamp,
-      },
+      item: { itemType: 'card', itemName: listing.cardName, createdAt: timestamp },
       condition: 'attribute_not_exists(pk)',
     });
   }
 
   await db.transactWrite(operations);
 
-  // Fetch updated data for response
   const sellerListings = await getUserListings(listing.sellerId);
 
-  const sellerInventory: InventoryData = {
-    userId: listing.sellerId,
-    packs: sellerPacks,
-    cards: sellerCards,
-    version: sellerVersion,
-  };
-
-  const buyerInventory: InventoryData = {
-    userId: buyerId,
-    packs: buyerInventoryItem ? buyerPacks : {},
-    cards: updatedBuyerCards,
-    version: buyerInventoryItem ? newBuyerVersion : 1,
-  };
-
-  return buildResponse(200, {
-    success: true,
-    message: 'Card purchase successful',
-    data: {
+  return success(
+    {
       type: 'card',
       card,
       cost: listing.cost,
       newRap,
-      sellerInventory,
-      buyerInventory,
+      sellerInventory: { userId: listing.sellerId, packs: seller.packs, cards: seller.cards, version: seller.version },
+      buyerInventory: {
+        userId: buyerId,
+        packs: buyer.exists ? buyer.packs : {},
+        cards: updatedBuyerCards,
+        version: buyer.exists ? newBuyerVersion : 1,
+      },
       sellerListings,
     },
-  });
+    'Card purchase successful',
+  );
 }
 
 async function handlePackPurchase(request: BuyPackRequest) {
   const { buyerId, listingId, expectedCost } = request;
 
   const listingItem = await db.get(`LISTING#PACK#${listingId}`, 'LISTING');
-  if (!listingItem) {
-    return buildResponse(404, {
-      success: false,
-      error: 'Not Found',
-      message: 'Listing not found or already sold',
-    });
-  }
+  if (!listingItem) return notFound('Listing not found or already sold');
 
   const listing = listingItem as unknown as PackListing;
 
   if (listing.sellerId === buyerId) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Cannot buy your own listing',
-    });
+    return badRequest('Cannot buy your own listing');
   }
 
   if (listing.cost !== expectedCost) {
-    return buildResponse(409, {
-      success: false,
-      error: 'Conflict',
-      message: `Price changed. Expected ${expectedCost}, actual ${listing.cost}`,
-    });
+    return conflict(`Price changed. Expected ${expectedCost}, actual ${listing.cost}`);
   }
 
   const [buyerInventoryItem, rapItem] = await Promise.all([
@@ -355,58 +186,35 @@ async function handlePackPurchase(request: BuyPackRequest) {
     db.get(`RAP#PACK#${listing.packName}`, 'CURRENT'),
   ]);
 
-  const buyerVersion = (buyerInventoryItem?.version as number) || 0;
-  const buyerCards = (buyerInventoryItem?.cards as InventoryCard[]) || [];
-  const buyerPacks = (buyerInventoryItem?.packs as Record<string, number>) || {};
-  const updatedBuyerPacks = { ...buyerPacks, [listing.packName]: (buyerPacks[listing.packName] || 0) + 1 };
+  const buyer = parseInventoryItem(buyerId, buyerInventoryItem);
+  const updatedBuyerPacks = { ...buyer.packs, [listing.packName]: (buyer.packs[listing.packName] || 0) + 1 };
 
   const timestamp = new Date().toISOString();
-
-  const currentRap = (rapItem as RapRecord)?.rap;
-  const newRap = calculateNewRap(currentRap, listing.cost);
+  const newRap = calculateNewRap((rapItem as RapRecord)?.rap, listing.cost);
 
   const operations: Parameters<typeof db.transactWrite>[0] = [
-    {
-      type: 'Delete',
-      pk: `LISTING#PACK#${listingId}`,
-      sk: 'LISTING',
-      condition: 'attribute_exists(pk)',
-    },
-    {
-      type: 'Delete',
-      pk: `USER_LISTINGS#${listing.sellerId}`,
-      sk: `PACK#${listingId}`,
-    },
+    { type: 'Delete', pk: `LISTING#PACK#${listingId}`, sk: 'LISTING', condition: 'attribute_exists(pk)' },
+    { type: 'Delete', pk: `USER_LISTINGS#${listing.sellerId}`, sk: `PACK#${listingId}` },
+    { type: 'Delete', pk: `ITEM_LISTINGS#PACK#${listing.packName}`, sk: listingId },
   ];
 
-  const newBuyerVersion = buyerVersion + 1;
-  if (buyerInventoryItem) {
+  const newBuyerVersion = buyer.version + 1;
+  if (buyer.exists) {
     operations.push({
       type: 'Update',
       pk: `USER#${buyerId}`,
       sk: 'INVENTORY',
-      updates: {
-        cards: buyerCards,
-        packs: updatedBuyerPacks,
-        version: newBuyerVersion,
-        updatedAt: timestamp,
-      },
+      updates: { cards: buyer.cards, packs: updatedBuyerPacks, version: newBuyerVersion, updatedAt: timestamp },
       condition: '#version = :expectedVersion',
       conditionNames: { '#version': 'version' },
-      conditionValues: { ':expectedVersion': buyerVersion },
+      conditionValues: { ':expectedVersion': buyer.version },
     });
   } else {
     operations.push({
       type: 'Put',
       pk: `USER#${buyerId}`,
       sk: 'INVENTORY',
-      item: {
-        userId: buyerId,
-        cards: [],
-        packs: { [listing.packName]: 1 },
-        version: 1,
-        updatedAt: timestamp,
-      },
+      item: { userId: buyerId, cards: [], packs: { [listing.packName]: 1 }, version: 1, updatedAt: timestamp },
       condition: 'attribute_not_exists(pk)',
     });
   }
@@ -416,70 +224,49 @@ async function handlePackPurchase(request: BuyPackRequest) {
       type: 'Update',
       pk: `RAP#PACK#${listing.packName}`,
       sk: 'CURRENT',
-      updates: {
-        rap: newRap,
-        lastUpdated: timestamp,
-      },
+      updates: { rap: newRap, lastUpdated: timestamp },
     });
   } else {
     operations.push({
       type: 'Put',
       pk: `RAP#PACK#${listing.packName}`,
       sk: 'CURRENT',
-      item: {
-        rap: newRap,
-        lastUpdated: timestamp,
-      },
+      item: { rap: newRap, lastUpdated: timestamp },
     });
     operations.push({
       type: 'Put',
       pk: 'RAP_REGISTRY',
       sk: `PACK#${listing.packName}`,
-      item: {
-        itemType: 'pack',
-        itemName: listing.packName,
-        createdAt: timestamp,
-      },
+      item: { itemType: 'pack', itemName: listing.packName, createdAt: timestamp },
       condition: 'attribute_not_exists(pk)',
     });
   }
 
   await db.transactWrite(operations);
 
-  // Fetch updated data for response
   const [sellerListings, sellerInventoryItem] = await Promise.all([
     getUserListings(listing.sellerId),
     db.get(`USER#${listing.sellerId}`, 'INVENTORY'),
   ]);
 
-  const sellerInventory: InventoryData = sellerInventoryItem
-    ? {
-        userId: listing.sellerId,
-        packs: (sellerInventoryItem.packs as Record<string, number>) || {},
-        cards: (sellerInventoryItem.cards as InventoryCard[]) || [],
-        version: (sellerInventoryItem.version as number) || 0,
-      }
-    : { userId: listing.sellerId, packs: {}, cards: [], version: 0 };
+  const seller = parseInventoryItem(listing.sellerId, sellerInventoryItem);
 
-  const buyerInventory: InventoryData = {
-    userId: buyerId,
-    packs: updatedBuyerPacks,
-    cards: buyerCards,
-    version: buyerInventoryItem ? newBuyerVersion : 1,
-  };
-
-  return buildResponse(200, {
-    success: true,
-    message: 'Pack purchase successful',
-    data: {
+  return success(
+    {
       type: 'pack',
       packName: listing.packName,
       listingId,
       cost: listing.cost,
       newRap,
-      sellerInventory,
-      buyerInventory,
+      sellerInventory: { userId: listing.sellerId, packs: seller.packs, cards: seller.cards, version: seller.version },
+      buyerInventory: {
+        userId: buyerId,
+        packs: updatedBuyerPacks,
+        cards: buyer.cards,
+        version: buyer.exists ? newBuyerVersion : 1,
+      },
       sellerListings,
     },
-  });
+    'Pack purchase successful',
+  );
 }

@@ -1,7 +1,9 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
-import { buildResponse } from '../utils/response';
+import { buildResponse, badRequest, conflict } from '../utils/response';
+import { parseBody } from '../utils/request';
+import { withRetry } from '../utils/retry';
 import { db } from '../utils/db';
-import { InventoryCard } from '../types/inventory';
+import { parseInventoryItem, ParsedInventory } from '../utils/inventory';
 
 interface Transfer {
   fromUserId: string;
@@ -15,6 +17,7 @@ interface TradeRequest {
 }
 
 const IDEMPOTENCY_TTL_SECONDS = 600;
+
 async function idempotentResponse(key: string, statusCode: number, body: Record<string, unknown>) {
   await db.update(`IDEMPOTENCY#${key}`, 'TRANSFER', {
     status: 'completed',
@@ -36,21 +39,13 @@ export const handler: APIGatewayProxyHandler = async event => {
   const idempotencyKey = event.headers['Idempotency-Key'] || event.headers['idempotency-key'];
 
   if (!idempotencyKey) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Idempotency-Key header is required for transfer operations',
-    });
+    return badRequest('Idempotency-Key header is required for transfer operations');
   }
 
   const existing = await db.get(`IDEMPOTENCY#${idempotencyKey}`, 'TRANSFER');
   if (existing) {
     if (existing.status === 'processing') {
-      return buildResponse(409, {
-        success: false,
-        error: 'Conflict',
-        message: 'This request is already being processed',
-      });
+      return conflict('This request is already being processed');
     }
     return buildResponse(existing.statusCode as number, existing.response as Record<string, unknown>);
   }
@@ -66,35 +61,18 @@ export const handler: APIGatewayProxyHandler = async event => {
     });
   } catch (error: unknown) {
     if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
-      return buildResponse(409, {
-        success: false,
-        error: 'Conflict',
-        message: 'This request is already being processed',
-      });
+      return conflict('This request is already being processed');
     }
     throw error;
   }
 
-  if (!event.body) {
-    return idempotentResponse(idempotencyKey, 400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Request body is required',
-    });
+  const parsed = parseBody<TradeRequest>(event.body);
+  if (!parsed.success) {
+    const response = JSON.parse(parsed.response.body);
+    return idempotentResponse(idempotencyKey, parsed.response.statusCode, response);
   }
 
-  let request: TradeRequest;
-  try {
-    request = JSON.parse(event.body) as TradeRequest;
-  } catch {
-    return idempotentResponse(idempotencyKey, 400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Invalid JSON in request body',
-    });
-  }
-
-  const { transfers } = request;
+  const { transfers } = parsed.data;
 
   if (!transfers?.length) {
     return idempotentResponse(idempotencyKey, 400, {
@@ -132,30 +110,11 @@ export const handler: APIGatewayProxyHandler = async event => {
 
   const uniqueUserIds = [...new Set(transfers.flatMap(t => [t.fromUserId, t.toUserId]))];
 
-  const MAX_RETRIES = 5;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
+  return withRetry(
+    async () => {
       const items = await Promise.all(uniqueUserIds.map(userId => db.get(`USER#${userId}`, 'INVENTORY')));
-
-      const inventories = new Map(
-        uniqueUserIds.map((userId, index) => [
-          userId,
-          items[index]
-            ? {
-                userId: items[index].userId as string,
-                packs: (items[index].packs as Record<string, number>) || {},
-                cards: (items[index].cards as InventoryCard[]) || [],
-                version: (items[index].version as number) || 0,
-                exists: true,
-              }
-            : {
-                userId,
-                packs: {},
-                cards: [],
-                version: 0,
-                exists: false,
-              },
-        ]),
+      const inventories = new Map<string, ParsedInventory>(
+        uniqueUserIds.map((userId, index) => [userId, parseInventoryItem(userId, items[index])]),
       );
 
       for (const { fromUserId, toUserId, cards, packs } of transfers) {
@@ -163,7 +122,7 @@ export const handler: APIGatewayProxyHandler = async event => {
         const toInventory = inventories.get(toUserId);
 
         if (!fromInventory || !toInventory) {
-          return buildResponse(500, {
+          return idempotentResponse(idempotencyKey, 500, {
             success: false,
             error: 'Internal Server Error',
             message: 'Failed to load user inventory',
@@ -211,6 +170,7 @@ export const handler: APIGatewayProxyHandler = async event => {
         }
       }
 
+      const timestamp = new Date().toISOString();
       const operations: Parameters<typeof db.transactWrite>[0] = [];
 
       for (const [userId, inventory] of inventories) {
@@ -225,15 +185,11 @@ export const handler: APIGatewayProxyHandler = async event => {
               cards: inventory.cards,
               packs: inventory.packs,
               version: inventory.version,
-              updatedAt: new Date().toISOString(),
+              updatedAt: timestamp,
             },
             condition: '#version = :expectedVersion',
-            conditionNames: {
-              '#version': 'version',
-            },
-            conditionValues: {
-              ':expectedVersion': inventory.version - 1,
-            },
+            conditionNames: { '#version': 'version' },
+            conditionValues: { ':expectedVersion': inventory.version - 1 },
           });
         } else {
           operations.push({
@@ -245,7 +201,7 @@ export const handler: APIGatewayProxyHandler = async event => {
               cards: inventory.cards,
               packs: inventory.packs,
               version: inventory.version,
-              updatedAt: new Date().toISOString(),
+              updatedAt: timestamp,
             },
             condition: 'attribute_not_exists(pk)',
           });
@@ -261,32 +217,7 @@ export const handler: APIGatewayProxyHandler = async event => {
           Array.from(inventories.entries()).map(([userId, inv]) => [userId, { cards: inv.cards, packs: inv.packs }]),
         ),
       });
-    } catch (error: unknown) {
-      if (error instanceof Error && error.name === 'TransactionCanceledException') {
-        console.log(`Transaction conflict on attempt ${attempt + 1}, retrying...`);
-        if (attempt === MAX_RETRIES - 1) {
-          return buildResponse(409, {
-            success: false,
-            error: 'Conflict',
-            message: 'Trade failed due to concurrent modifications. Please retry.',
-          });
-        }
-        await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
-        continue;
-      }
-
-      console.error('Error in trade:', error);
-      return buildResponse(500, {
-        success: false,
-        error: 'Internal Server Error',
-        message: 'Failed to complete trade',
-      });
-    }
-  }
-
-  return buildResponse(500, {
-    success: false,
-    error: 'Internal Server Error',
-    message: 'Max retries exceeded',
-  });
+    },
+    { baseDelayMs: 100, conflictMessage: 'Trade failed due to concurrent modifications. Please retry.' },
+  );
 };

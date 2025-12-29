@@ -1,5 +1,5 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
-import { buildResponse } from '../utils/response';
+import { success, serverError } from '../utils/response';
 import { db } from '../utils/db';
 import { RapRecord, RapHistoryEntry, ItemRapData, MarketplaceHistoryResponse } from '../types/inventory';
 
@@ -32,23 +32,13 @@ export const handler: APIGatewayProxyHandler = async () => {
     const registryItems = registryResult.items;
 
     if (registryItems.length === 0) {
-      return buildResponse(200, {
-        success: true,
-        data: {
-          cards: {},
-          packs: {},
-        } satisfies MarketplaceHistoryResponse,
-      });
+      return success({ cards: {}, packs: {} } satisfies MarketplaceHistoryResponse);
     }
 
-    const rapKeys = registryItems.map(item => {
-      const itemType = item.itemType as string;
-      const itemName = item.itemName as string;
-      return {
-        pk: `RAP#${itemType.toUpperCase()}#${itemName}`,
-        sk: 'CURRENT',
-      };
-    });
+    const rapKeys = registryItems.map(item => ({
+      pk: `RAP#${(item.itemType as string).toUpperCase()}#${item.itemName as string}`,
+      sk: 'CURRENT',
+    }));
 
     const rapRecords = await db.batchGet(rapKeys);
 
@@ -88,27 +78,18 @@ export const handler: APIGatewayProxyHandler = async () => {
               type: 'Put',
               pk,
               sk: `HISTORY#${date}`,
-              item: {
-                rap: rapRecord.rap,
-                date,
-              },
+              item: { rap: rapRecord.rap, date },
             });
             history.push({ date, rap: rapRecord.rap as number });
           }
         }
 
-        updateOperations.push({
-          pk,
-          updates: { lastSnapshotDate: today },
-        });
+        updateOperations.push({ pk, updates: { lastSnapshotDate: today } });
       }
 
       history.sort((a, b) => a.date.localeCompare(b.date));
 
-      const itemData: ItemRapData = {
-        rap: rapRecord.rap as number,
-        history,
-      };
+      const itemData: ItemRapData = { rap: rapRecord.rap as number, history };
 
       if (itemType === 'card') {
         response.cards[itemName] = itemData;
@@ -118,11 +99,7 @@ export const handler: APIGatewayProxyHandler = async () => {
     }
 
     if (snapshotOperations.length > 0) {
-      const snapshotItems = snapshotOperations.map(op => ({
-        pk: op.pk,
-        sk: op.sk,
-        ...op.item,
-      }));
+      const snapshotItems = snapshotOperations.map(op => ({ pk: op.pk, sk: op.sk, ...op.item }));
       await db.batchPut(snapshotItems);
     }
 
@@ -130,16 +107,9 @@ export const handler: APIGatewayProxyHandler = async () => {
       await Promise.all(updateOperations.map(op => db.update(op.pk, 'CURRENT', op.updates)));
     }
 
-    return buildResponse(200, {
-      success: true,
-      data: response,
-    });
+    return success(response);
   } catch (error) {
     console.error('Error fetching marketplace history:', error);
-    return buildResponse(500, {
-      success: false,
-      error: 'Internal Server Error',
-      message: 'Failed to fetch marketplace history',
-    });
+    return serverError('Failed to fetch marketplace history');
   }
 };

@@ -1,7 +1,7 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
-import { buildResponse } from '../utils/response';
+import { badRequest, success, serverError } from '../utils/response';
 import { db } from '../utils/db';
-import { InventoryCard } from '../types/inventory';
+import { parseInventoryItem } from '../utils/inventory';
 
 /**
  * @route GET /user/inventory/{userId}
@@ -13,43 +13,21 @@ export const handler: APIGatewayProxyHandler = async event => {
   const userId = event.pathParameters?.userId;
 
   if (!userId) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'userId is required in path parameters',
-    });
+    return badRequest('userId is required in path parameters');
   }
 
   try {
     const item = await db.get(`USER#${userId}`, 'INVENTORY');
+    const inventory = parseInventoryItem(userId, item);
 
-    if (!item) {
-      return buildResponse(200, {
-        success: true,
-        data: {
-          userId,
-          packs: {},
-          cards: [],
-          version: 0,
-        },
-      });
-    }
-
-    return buildResponse(200, {
-      success: true,
-      data: {
-        userId: item.userId as string,
-        packs: (item.packs as Record<string, number>) || {},
-        cards: (item.cards as Array<InventoryCard>) || [],
-        version: (item.version as number) || 0,
-      },
+    return success({
+      userId: inventory.userId,
+      packs: inventory.packs,
+      cards: inventory.cards,
+      version: inventory.version,
     });
   } catch (error) {
     console.error('Error fetching user inventory:', error);
-    return buildResponse(500, {
-      success: false,
-      error: 'Internal Server Error',
-      message: 'Failed to fetch user inventory',
-    });
+    return serverError('Failed to fetch user inventory');
   }
 };

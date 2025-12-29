@@ -252,6 +252,34 @@ Resources:
             Auth:
               Authorizer: ApiAuthorizer
 
+  # GET /marketplace/find-sellers
+  MarketplaceFindActiveSellersFunction:
+    Type: AWS::Serverless::Function
+    Timeout: 10
+    MemorySize: 256
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/marketplaceFindActiveSellers.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/marketplaceFindActiveSellers.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /marketplace/find-sellers
+            Method: get
+
+
   # GET /marketplace/history
   MarketplaceGetHistoryFunction:
     Type: AWS::Serverless::Function
@@ -336,6 +364,35 @@ Resources:
           Properties:
             RestApiId: !Ref MyApi
             Path: /marketplace/list
+            Method: post
+            Auth:
+              Authorizer: ApiAuthorizer
+
+  # POST /marketplace/sellers/toggle [AUTH REQUIRED]
+  MarketplaceToggleActiveSellerFunction:
+    Type: AWS::Serverless::Function
+    Timeout: 5
+    MemorySize: 256
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints: 
+          - src/handlers/marketplaceToggleActiveSeller.ts
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/marketplaceToggleActiveSeller.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MainTable
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /marketplace/sellers/toggle
             Method: post
             Auth:
               Authorizer: ApiAuthorizer

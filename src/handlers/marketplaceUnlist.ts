@@ -1,7 +1,11 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
-import { buildResponse } from '../utils/response';
+import { badRequest, notFound, forbidden, success } from '../utils/response';
+import { parseBody } from '../utils/request';
+import { withRetry } from '../utils/retry';
 import { db } from '../utils/db';
-import { InventoryCard, CardListing, PackListing, MarketplaceListing } from '../types/inventory';
+import { getUserListings } from '../utils/marketplace';
+import { parseInventoryItem, reconstructCard } from '../utils/inventory';
+import { CardListing, PackListing } from '../types/inventory';
 
 interface UnlistCardRequest {
   type: 'card';
@@ -17,25 +21,6 @@ interface UnlistPackRequest {
 
 type UnlistRequest = UnlistCardRequest | UnlistPackRequest;
 
-async function getUserListings(userId: string): Promise<MarketplaceListing[]> {
-  const userListingsResult = await db.query(`USER_LISTINGS#${userId}`);
-  if (userListingsResult.items.length === 0) return [];
-
-  const listingKeys = userListingsResult.items.map(item => {
-    const sk = item.sk as string;
-    if (sk.startsWith('CARD#')) {
-      return { pk: `LISTING#CARD#${sk.replace('CARD#', '')}`, sk: 'LISTING' };
-    } else {
-      return { pk: `LISTING#PACK#${sk.replace('PACK#', '')}`, sk: 'LISTING' };
-    }
-  });
-
-  const listingItems = await db.batchGet(listingKeys);
-  return listingItems
-    .map(item => item as unknown as MarketplaceListing)
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-}
-
 /**
  * @route POST /marketplace/unlist
  * @auth
@@ -44,210 +29,107 @@ async function getUserListings(userId: string): Promise<MarketplaceListing[]> {
  * @description Unlists an item from the marketplace
  */
 export const handler: APIGatewayProxyHandler = async event => {
-  if (!event.body) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Request body is required',
-    });
-  }
+  const parsed = parseBody<UnlistRequest>(event.body);
+  if (!parsed.success) return parsed.response;
 
-  let request: UnlistRequest;
-  try {
-    request = JSON.parse(event.body) as UnlistRequest;
-  } catch {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Invalid JSON in request body',
-    });
-  }
-
-  const { type, userId } = request;
+  const { type, userId } = parsed.data;
 
   if (!type || !userId) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'type and userId are required',
-    });
+    return badRequest('type and userId are required');
   }
 
   if (type !== 'card' && type !== 'pack') {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'type must be "card" or "pack"',
-    });
+    return badRequest('type must be "card" or "pack"');
   }
 
-  if (type === 'card' && !('cardId' in request && request.cardId)) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'cardId is required for card unlisting',
-    });
+  if (type === 'card' && !('cardId' in parsed.data && parsed.data.cardId)) {
+    return badRequest('cardId is required for card unlisting');
   }
 
-  if (type === 'pack' && !('listingId' in request && request.listingId)) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'listingId is required for pack unlisting',
-    });
+  if (type === 'pack' && !('listingId' in parsed.data && parsed.data.listingId)) {
+    return badRequest('listingId is required for pack unlisting');
   }
 
-  const MAX_RETRIES = 5;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
+  return withRetry(
+    async () => {
       const timestamp = new Date().toISOString();
       const operations: Parameters<typeof db.transactWrite>[0] = [];
 
       const inventoryItem = await db.get(`USER#${userId}`, 'INVENTORY');
-      const inventoryVersion = (inventoryItem?.version as number) || 0;
-      const cards = (inventoryItem?.cards as InventoryCard[]) || [];
-      const packs = (inventoryItem?.packs as Record<string, number>) || {};
-      let updatedCards = cards;
-      let updatedPacks = packs;
+      const inventory = parseInventoryItem(userId, inventoryItem);
+      let updatedCards = inventory.cards;
+      let updatedPacks = inventory.packs;
 
       if (type === 'card') {
-        const cardId = (request as UnlistCardRequest).cardId;
+        const cardId = (parsed.data as UnlistCardRequest).cardId;
 
         const listingItem = await db.get(`LISTING#CARD#${cardId}`, 'LISTING');
-        if (!listingItem) {
-          return buildResponse(404, {
-            success: false,
-            error: 'Not Found',
-            message: 'Listing not found',
-          });
-        }
+        if (!listingItem) return notFound('Listing not found');
 
         const listing = listingItem as unknown as CardListing;
+        if (listing.sellerId !== userId) return forbidden('You can only unlist your own items');
 
-        if (listing.sellerId !== userId) {
-          return buildResponse(403, {
-            success: false,
-            error: 'Forbidden',
-            message: 'You can only unlist your own items',
-          });
-        }
+        const card = reconstructCard(listing);
+        updatedCards = [...inventory.cards, card];
 
-        // Reconstruct card from listing data
-        const card: InventoryCard = {
-          cardId: listing.cardId,
-          cardName: listing.cardName,
-          level: listing.cardLevel,
-          variant: listing.cardVariant,
-        };
-        updatedCards = [...cards, card];
+        operations.push(
+          { type: 'Delete', pk: `LISTING#CARD#${cardId}`, sk: 'LISTING', condition: 'attribute_exists(pk)' },
+          { type: 'Delete', pk: `USER_LISTINGS#${userId}`, sk: `CARD#${cardId}` },
+          { type: 'Delete', pk: `ITEM_LISTINGS#CARD#${listing.cardName}`, sk: cardId },
+        );
 
-        operations.push({
-          type: 'Delete',
-          pk: `LISTING#CARD#${cardId}`,
-          sk: 'LISTING',
-          condition: 'attribute_exists(pk)',
-        });
-
-        operations.push({
-          type: 'Delete',
-          pk: `USER_LISTINGS#${userId}`,
-          sk: `CARD#${cardId}`,
-        });
-
-        if (inventoryItem) {
+        if (inventory.exists) {
           operations.push({
             type: 'Update',
             pk: `USER#${userId}`,
             sk: 'INVENTORY',
-            updates: {
-              cards: updatedCards,
-              packs: updatedPacks,
-              version: inventoryVersion + 1,
-              updatedAt: timestamp,
-            },
+            updates: { cards: updatedCards, packs: updatedPacks, version: inventory.version + 1, updatedAt: timestamp },
             condition: '#version = :expectedVersion',
             conditionNames: { '#version': 'version' },
-            conditionValues: { ':expectedVersion': inventoryVersion },
+            conditionValues: { ':expectedVersion': inventory.version },
           });
         } else {
           operations.push({
             type: 'Put',
             pk: `USER#${userId}`,
             sk: 'INVENTORY',
-            item: {
-              userId,
-              cards: [card],
-              packs: {},
-              version: 1,
-              updatedAt: timestamp,
-            },
+            item: { userId, cards: [card], packs: {}, version: 1, updatedAt: timestamp },
             condition: 'attribute_not_exists(pk)',
           });
         }
       } else {
-        const listingId = (request as UnlistPackRequest).listingId;
+        const listingId = (parsed.data as UnlistPackRequest).listingId;
 
         const listingItem = await db.get(`LISTING#PACK#${listingId}`, 'LISTING');
-        if (!listingItem) {
-          return buildResponse(404, {
-            success: false,
-            error: 'Not Found',
-            message: 'Listing not found',
-          });
-        }
+        if (!listingItem) return notFound('Listing not found');
 
         const listing = listingItem as unknown as PackListing;
+        if (listing.sellerId !== userId) return forbidden('You can only unlist your own items');
 
-        if (listing.sellerId !== userId) {
-          return buildResponse(403, {
-            success: false,
-            error: 'Forbidden',
-            message: 'You can only unlist your own items',
-          });
-        }
+        updatedPacks = { ...inventory.packs, [listing.packName]: (inventory.packs[listing.packName] || 0) + 1 };
 
-        updatedPacks = { ...packs, [listing.packName]: (packs[listing.packName] || 0) + 1 };
+        operations.push(
+          { type: 'Delete', pk: `LISTING#PACK#${listingId}`, sk: 'LISTING', condition: 'attribute_exists(pk)' },
+          { type: 'Delete', pk: `USER_LISTINGS#${userId}`, sk: `PACK#${listingId}` },
+          { type: 'Delete', pk: `ITEM_LISTINGS#PACK#${listing.packName}`, sk: listingId },
+        );
 
-        operations.push({
-          type: 'Delete',
-          pk: `LISTING#PACK#${listingId}`,
-          sk: 'LISTING',
-          condition: 'attribute_exists(pk)',
-        });
-
-        operations.push({
-          type: 'Delete',
-          pk: `USER_LISTINGS#${userId}`,
-          sk: `PACK#${listingId}`,
-        });
-
-        if (inventoryItem) {
+        if (inventory.exists) {
           operations.push({
             type: 'Update',
             pk: `USER#${userId}`,
             sk: 'INVENTORY',
-            updates: {
-              cards: updatedCards,
-              packs: updatedPacks,
-              version: inventoryVersion + 1,
-              updatedAt: timestamp,
-            },
+            updates: { cards: updatedCards, packs: updatedPacks, version: inventory.version + 1, updatedAt: timestamp },
             condition: '#version = :expectedVersion',
             conditionNames: { '#version': 'version' },
-            conditionValues: { ':expectedVersion': inventoryVersion },
+            conditionValues: { ':expectedVersion': inventory.version },
           });
         } else {
           operations.push({
             type: 'Put',
             pk: `USER#${userId}`,
             sk: 'INVENTORY',
-            item: {
-              userId,
-              cards: [],
-              packs: { [listing.packName]: 1 },
-              version: 1,
-              updatedAt: timestamp,
-            },
+            item: { userId, cards: [], packs: { [listing.packName]: 1 }, version: 1, updatedAt: timestamp },
             condition: 'attribute_not_exists(pk)',
           });
         }
@@ -255,50 +137,19 @@ export const handler: APIGatewayProxyHandler = async event => {
 
       await db.transactWrite(operations);
 
-      // Fetch updated listings
       const updatedListings = await getUserListings(userId);
+      const newVersion = inventory.exists ? inventory.version + 1 : 1;
 
-      return buildResponse(200, {
-        success: true,
-        message: `${type === 'card' ? 'Card' : 'Pack'} unlisted successfully`,
-        data: {
+      return success(
+        {
           type,
           listings: updatedListings,
           listingsCount: updatedListings.length,
-          sellerInventory: {
-            userId,
-            cards: updatedCards,
-            packs: updatedPacks,
-            version: inventoryItem ? inventoryVersion + 1 : 1,
-          },
+          sellerInventory: { userId, cards: updatedCards, packs: updatedPacks, version: newVersion },
         },
-      });
-    } catch (error: unknown) {
-      if (error instanceof Error && error.name === 'TransactionCanceledException') {
-        console.log(`Transaction conflict on attempt ${attempt + 1}, retrying...`);
-        if (attempt === MAX_RETRIES - 1) {
-          return buildResponse(409, {
-            success: false,
-            error: 'Conflict',
-            message: 'Listing was modified or already removed',
-          });
-        }
-        await new Promise(resolve => setTimeout(resolve, 50 * (attempt + 1)));
-        continue;
-      }
-
-      console.error('Error unlisting item:', error);
-      return buildResponse(500, {
-        success: false,
-        error: 'Internal Server Error',
-        message: 'Failed to unlist item',
-      });
-    }
-  }
-
-  return buildResponse(500, {
-    success: false,
-    error: 'Internal Server Error',
-    message: 'Max retries exceeded',
-  });
+        `${type === 'card' ? 'Card' : 'Pack'} unlisted successfully`,
+      );
+    },
+    { conflictMessage: 'Listing was modified or already removed' },
+  );
 };

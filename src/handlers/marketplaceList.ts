@@ -1,7 +1,11 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
-import { buildResponse } from '../utils/response';
+import { badRequest, notFound, conflict, success } from '../utils/response';
+import { parseBody } from '../utils/request';
+import { withRetry } from '../utils/retry';
 import { db } from '../utils/db';
-import { InventoryCard, CardListing, PackListing, MarketplaceListing } from '../types/inventory';
+import { getUserListings } from '../utils/marketplace';
+import { parseInventoryItem } from '../utils/inventory';
+import { CardListing, PackListing, MarketplaceListing } from '../types/inventory';
 import { randomUUID } from 'crypto';
 
 interface ListCardRequest {
@@ -24,25 +28,6 @@ type ListRequest = ListCardRequest | ListPackRequest;
 
 const MAX_LISTINGS = 256;
 
-async function getUserListings(userId: string): Promise<MarketplaceListing[]> {
-  const userListingsResult = await db.query(`USER_LISTINGS#${userId}`);
-  if (userListingsResult.items.length === 0) return [];
-
-  const listingKeys = userListingsResult.items.map(item => {
-    const sk = item.sk as string;
-    if (sk.startsWith('CARD#')) {
-      return { pk: `LISTING#CARD#${sk.replace('CARD#', '')}`, sk: 'LISTING' };
-    } else {
-      return { pk: `LISTING#PACK#${sk.replace('PACK#', '')}`, sk: 'LISTING' };
-    }
-  });
-
-  const listingItems = await db.batchGet(listingKeys);
-  return listingItems
-    .map(item => item as unknown as MarketplaceListing)
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-}
-
 /**
  * @route POST /marketplace/list
  * @auth
@@ -51,125 +36,63 @@ async function getUserListings(userId: string): Promise<MarketplaceListing[]> {
  * @description Lists a card or pack for sale on the marketplace (max 256 per user)
  */
 export const handler: APIGatewayProxyHandler = async event => {
-  if (!event.body) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Request body is required',
-    });
-  }
+  const parsed = parseBody<ListRequest>(event.body);
+  if (!parsed.success) return parsed.response;
 
-  let request: ListRequest;
-  try {
-    request = JSON.parse(event.body) as ListRequest;
-  } catch {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'Invalid JSON in request body',
-    });
-  }
-
-  const { type, userId, username, cost } = request;
+  const { type, userId, username, cost } = parsed.data;
 
   if (!type || !userId || !username || cost === undefined) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'type, userId, username, and cost are required',
-    });
+    return badRequest('type, userId, username, and cost are required');
   }
 
   if (type !== 'card' && type !== 'pack') {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'type must be "card" or "pack"',
-    });
+    return badRequest('type must be "card" or "pack"');
   }
 
   if (typeof cost !== 'number' || cost < 1 || !Number.isInteger(cost)) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'cost must be a positive integer',
-    });
+    return badRequest('cost must be a positive integer');
   }
 
-  if (type === 'card' && !('cardId' in request && request.cardId)) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'cardId is required for card listings',
-    });
+  if (type === 'card' && !('cardId' in parsed.data && parsed.data.cardId)) {
+    return badRequest('cardId is required for card listings');
   }
 
-  if (type === 'pack' && !('packName' in request && request.packName)) {
-    return buildResponse(400, {
-      success: false,
-      error: 'Bad Request',
-      message: 'packName is required for pack listings',
-    });
+  if (type === 'pack' && !('packName' in parsed.data && parsed.data.packName)) {
+    return badRequest('packName is required for pack listings');
   }
 
-  const MAX_RETRIES = 5;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
+  return withRetry(
+    async () => {
       const [userListingsResult, inventoryItem] = await Promise.all([
         db.query(`USER_LISTINGS#${userId}`),
         db.get(`USER#${userId}`, 'INVENTORY'),
       ]);
 
-      if (!inventoryItem) {
-        return buildResponse(404, {
-          success: false,
-          error: 'Not Found',
-          message: 'User inventory not found',
-        });
-      }
+      if (!inventoryItem) return notFound('User inventory not found');
 
-      const currentListingCount = userListingsResult.items.length;
-      if (currentListingCount >= MAX_LISTINGS) {
-        return buildResponse(400, {
-          success: false,
-          error: 'Bad Request',
-          message: `Maximum of ${MAX_LISTINGS} listings reached`,
-        });
+      if (userListingsResult.items.length >= MAX_LISTINGS) {
+        return badRequest(`Maximum of ${MAX_LISTINGS} listings reached`);
       }
 
       const timestamp = new Date().toISOString();
-      let listing: MarketplaceListing;
+      const inventory = parseInventoryItem(userId, inventoryItem);
       const operations: Parameters<typeof db.transactWrite>[0] = [];
 
-      const inventoryVersion = (inventoryItem.version as number) || 0;
-      const cards = (inventoryItem.cards as InventoryCard[]) || [];
-      const packs = (inventoryItem.packs as Record<string, number>) || {};
-      let updatedCards = cards;
-      let updatedPacks = packs;
+      let listing: MarketplaceListing;
+      let updatedCards = inventory.cards;
+      let updatedPacks = inventory.packs;
 
       if (type === 'card') {
-        const cardId = (request as ListCardRequest).cardId;
-        const cardIndex = cards.findIndex(c => c.cardId === cardId);
+        const cardId = (parsed.data as ListCardRequest).cardId;
+        const cardIndex = inventory.cards.findIndex(c => c.cardId === cardId);
 
-        if (cardIndex === -1) {
-          return buildResponse(404, {
-            success: false,
-            error: 'Not Found',
-            message: 'Card not found in user inventory',
-          });
-        }
+        if (cardIndex === -1) return notFound('Card not found in user inventory');
 
         const existingListing = await db.get(`LISTING#CARD#${cardId}`, 'LISTING');
-        if (existingListing) {
-          return buildResponse(409, {
-            success: false,
-            error: 'Conflict',
-            message: 'This card is already listed on the marketplace',
-          });
-        }
+        if (existingListing) return conflict('This card is already listed on the marketplace');
 
-        const card = cards[cardIndex];
-        updatedCards = [...cards];
+        const card = inventory.cards[cardIndex];
+        updatedCards = [...inventory.cards];
         updatedCards.splice(cardIndex, 1);
 
         listing = {
@@ -184,49 +107,32 @@ export const handler: APIGatewayProxyHandler = async event => {
           timestamp,
         } satisfies CardListing;
 
-        operations.push({
-          type: 'Put',
-          pk: `LISTING#CARD#${cardId}`,
-          sk: 'LISTING',
-          item: { ...listing },
-          condition: 'attribute_not_exists(pk)',
-        });
-
-        operations.push({
-          type: 'Put',
-          pk: `USER_LISTINGS#${userId}`,
-          sk: `CARD#${cardId}`,
-          item: { cardId, type: 'card' },
-          condition: 'attribute_not_exists(pk)',
-        });
-
-        operations.push({
-          type: 'Update',
-          pk: `USER#${userId}`,
-          sk: 'INVENTORY',
-          updates: {
-            cards: updatedCards,
-            packs: updatedPacks,
-            version: inventoryVersion + 1,
-            updatedAt: timestamp,
+        operations.push(
+          {
+            type: 'Put',
+            pk: `LISTING#CARD#${cardId}`,
+            sk: 'LISTING',
+            item: { ...listing },
+            condition: 'attribute_not_exists(pk)',
           },
-          condition: '#version = :expectedVersion',
-          conditionNames: { '#version': 'version' },
-          conditionValues: { ':expectedVersion': inventoryVersion },
-        });
+          {
+            type: 'Put',
+            pk: `USER_LISTINGS#${userId}`,
+            sk: `CARD#${cardId}`,
+            item: { cardId, type: 'card' },
+            condition: 'attribute_not_exists(pk)',
+          },
+          { type: 'Put', pk: `ITEM_LISTINGS#CARD#${card.cardName}`, sk: cardId, item: { sellerId: userId, cost } },
+        );
       } else {
-        const packName = (request as ListPackRequest).packName;
+        const packName = (parsed.data as ListPackRequest).packName;
 
-        if (!packs[packName] || packs[packName] < 1) {
-          return buildResponse(404, {
-            success: false,
-            error: 'Not Found',
-            message: 'Pack not found in user inventory or insufficient quantity',
-          });
+        if (!inventory.packs[packName] || inventory.packs[packName] < 1) {
+          return notFound('Pack not found in user inventory or insufficient quantity');
         }
 
         const listingId = randomUUID();
-        updatedPacks = { ...packs, [packName]: packs[packName] - 1 };
+        updatedPacks = { ...inventory.packs, [packName]: inventory.packs[packName] - 1 };
         if (updatedPacks[packName] === 0) delete updatedPacks[packName];
 
         listing = {
@@ -239,84 +145,49 @@ export const handler: APIGatewayProxyHandler = async event => {
           timestamp,
         } satisfies PackListing;
 
-        operations.push({
-          type: 'Put',
-          pk: `LISTING#PACK#${listingId}`,
-          sk: 'LISTING',
-          item: { ...listing },
-          condition: 'attribute_not_exists(pk)',
-        });
-
-        operations.push({
-          type: 'Put',
-          pk: `USER_LISTINGS#${userId}`,
-          sk: `PACK#${listingId}`,
-          item: { listingId, packName, type: 'pack' },
-          condition: 'attribute_not_exists(pk)',
-        });
-
-        operations.push({
-          type: 'Update',
-          pk: `USER#${userId}`,
-          sk: 'INVENTORY',
-          updates: {
-            cards: updatedCards,
-            packs: updatedPacks,
-            version: inventoryVersion + 1,
-            updatedAt: timestamp,
+        operations.push(
+          {
+            type: 'Put',
+            pk: `LISTING#PACK#${listingId}`,
+            sk: 'LISTING',
+            item: { ...listing },
+            condition: 'attribute_not_exists(pk)',
           },
-          condition: '#version = :expectedVersion',
-          conditionNames: { '#version': 'version' },
-          conditionValues: { ':expectedVersion': inventoryVersion },
-        });
+          {
+            type: 'Put',
+            pk: `USER_LISTINGS#${userId}`,
+            sk: `PACK#${listingId}`,
+            item: { listingId, packName, type: 'pack' },
+            condition: 'attribute_not_exists(pk)',
+          },
+          { type: 'Put', pk: `ITEM_LISTINGS#PACK#${packName}`, sk: listingId, item: { sellerId: userId, cost } },
+        );
       }
+
+      operations.push({
+        type: 'Update',
+        pk: `USER#${userId}`,
+        sk: 'INVENTORY',
+        updates: { cards: updatedCards, packs: updatedPacks, version: inventory.version + 1, updatedAt: timestamp },
+        condition: '#version = :expectedVersion',
+        conditionNames: { '#version': 'version' },
+        conditionValues: { ':expectedVersion': inventory.version },
+      });
 
       await db.transactWrite(operations);
 
-      // Fetch updated listings
       const updatedListings = await getUserListings(userId);
 
-      return buildResponse(200, {
-        success: true,
-        message: `${type === 'card' ? 'Card' : 'Pack'} listed successfully`,
-        data: {
+      return success(
+        {
           listing,
           listings: updatedListings,
           listingsCount: updatedListings.length,
-          sellerInventory: {
-            userId,
-            cards: updatedCards,
-            packs: updatedPacks,
-            version: inventoryVersion + 1,
-          },
+          sellerInventory: { userId, cards: updatedCards, packs: updatedPacks, version: inventory.version + 1 },
         },
-      });
-    } catch (error: unknown) {
-      if (error instanceof Error && error.name === 'TransactionCanceledException') {
-        console.log(`Transaction conflict on attempt ${attempt + 1}, retrying...`);
-        if (attempt === MAX_RETRIES - 1) {
-          return buildResponse(409, {
-            success: false,
-            error: 'Conflict',
-            message: 'Failed to list item due to concurrent operation. Please retry.',
-          });
-        }
-        await new Promise(resolve => setTimeout(resolve, 50 * (attempt + 1)));
-        continue;
-      }
-
-      console.error('Error listing item:', error);
-      return buildResponse(500, {
-        success: false,
-        error: 'Internal Server Error',
-        message: 'Failed to list item',
-      });
-    }
-  }
-
-  return buildResponse(500, {
-    success: false,
-    error: 'Internal Server Error',
-    message: 'Max retries exceeded',
-  });
+        `${type === 'card' ? 'Card' : 'Pack'} listed successfully`,
+      );
+    },
+    { conflictMessage: 'Failed to list item due to concurrent operation. Please retry.' },
+  );
 };
