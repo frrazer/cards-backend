@@ -46,7 +46,7 @@ export const handler: APIGatewayProxyHandler = async event => {
     });
 
     const listingsPromise = cached(`listings:${itemType}:${itemName}`, TTL.LISTINGS_INDEX, async () => {
-      const result = await db.query(`ITEM_LISTINGS#${itemType.toUpperCase()}#${itemName}`);
+      const result = await db.query(`ITEM_LISTINGS#${itemType.toUpperCase()}#${itemName}`, { limit: 500 });
       return result.items as unknown as MarketplaceListing[];
     });
 

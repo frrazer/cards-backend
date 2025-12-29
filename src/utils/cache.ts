@@ -89,8 +89,8 @@ export async function cachedBatch<T>(
 }
 
 export const TTL = {
-  RAP: 30_000,
-  HISTORY: 300_000,
-  ACTIVE_SELLERS: 10_000,
-  LISTINGS_INDEX: 5_000,
+  RAP: 60_000,
+  HISTORY: 600_000,
+  ACTIVE_SELLERS: 15_000,
+  LISTINGS_INDEX: 30_000,
 } as const;

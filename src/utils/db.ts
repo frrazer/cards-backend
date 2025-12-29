@@ -157,23 +157,17 @@ export const db = {
 
   batchGet: async (keys: Array<{ pk: string; sk: string }>) => {
     if (keys.length === 0) return [];
-    if (keys.length > 100) {
-      throw new Error('BatchGet supports maximum 100 items. Use multiple calls or implement chunking.');
+
+    const chunks: Array<Array<{ pk: string; sk: string }>> = [];
+    for (let i = 0; i < keys.length; i += 100) {
+      chunks.push(keys.slice(i, i + 100));
     }
 
-    return (
-      (
-        await docClient.send(
-          new BatchGetCommand({
-            RequestItems: {
-              [TABLE_NAME]: {
-                Keys: keys,
-              },
-            },
-          }),
-        )
-      ).Responses?.[TABLE_NAME] || []
+    const results = await Promise.all(
+      chunks.map(chunk => docClient.send(new BatchGetCommand({ RequestItems: { [TABLE_NAME]: { Keys: chunk } } }))),
     );
+
+    return results.flatMap(r => r.Responses?.[TABLE_NAME] || []);
   },
 
   batchPut: async (items: Array<Record<string, unknown>>) => {

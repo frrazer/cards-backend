@@ -168,7 +168,7 @@ Resources:
           Priority: 2
           Statement:
             RateBasedStatement:
-              Limit: 100
+              Limit: 500
               AggregateKeyType: IP
           Action:
             Block: {}

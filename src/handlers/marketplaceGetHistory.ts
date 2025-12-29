@@ -37,19 +37,27 @@ export const handler: APIGatewayProxyHandler = async () => {
 };
 
 async function fetchMarketplaceHistory(): Promise<MarketplaceHistoryResponse> {
-  const registryResult = await db.query('RAP_REGISTRY');
-  const registryItems = registryResult.items;
+  // Paginate through all registry items
+  const registryItems: Array<Record<string, unknown>> = [];
+  let lastKey: Record<string, unknown> | undefined;
+
+  do {
+    const result = await db.query('RAP_REGISTRY', { exclusiveStartKey: lastKey, limit: 500 });
+    registryItems.push(...result.items);
+    lastKey = result.lastEvaluatedKey;
+  } while (lastKey);
 
   if (registryItems.length === 0) {
     return { cards: {}, packs: {} };
   }
 
-  // Batch get all current RAP records
-  const rapKeys = registryItems.map(item => ({
-    pk: `RAP#${(item.itemType as string).toUpperCase()}#${item.itemName as string}`,
-    sk: 'CURRENT',
-  }));
-  const rapRecords = await db.batchGet(rapKeys);
+  // Batch get all current RAP records (now auto-chunked)
+  const rapRecords = await db.batchGet(
+    registryItems.map(item => ({
+      pk: `RAP#${(item.itemType as string).toUpperCase()}#${item.itemName as string}`,
+      sk: 'CURRENT',
+    })),
+  );
 
   const rapMap = new Map<string, RapRecord & { pk: string }>();
   for (const record of rapRecords) {
