@@ -105,7 +105,7 @@ export const db = {
     pk: string,
     options?: {
       skBeginsWith?: string;
-      skBetween?: [string, string]; // [start, end]
+      skBetween?: [string, string];
       skGreaterThan?: string;
       skGreaterThanOrEqual?: string;
       skLessThan?: string;
@@ -278,7 +278,7 @@ export const db = {
       sk: string;
       item?: Record<string, unknown>;
       updates?: Record<string, unknown>;
-      increments?: Record<string, number>; // For ADD operations
+      increments?: Record<string, number>;
       condition?: string;
       conditionNames?: Record<string, string>;
       conditionValues?: Record<string, unknown>;

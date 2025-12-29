@@ -2,13 +2,15 @@ import { APIGatewayProxyHandler } from 'aws-lambda';
 import { badRequest, success, serverError } from '../utils/response';
 import { db } from '../utils/db';
 import { parseInventoryItem } from '../utils/inventory';
+import { RouteConfig } from '../types/route';
 
-/**
- * @route GET /user/inventory/{userId}
- * @timeout 3
- * @memory 128
- * @description Retrieves a user's inventory
- */
+export const route: RouteConfig = {
+  method: 'GET',
+  path: '/user/inventory/{userId}',
+  timeout: 3,
+  memory: 128,
+};
+
 export const handler: APIGatewayProxyHandler = async event => {
   const userId = event.pathParameters?.userId;
 

@@ -5,7 +5,9 @@ import { withRetry } from '../utils/retry';
 import { db } from '../utils/db';
 import { getUserListings } from '../utils/marketplace';
 import { parseInventoryItem, reconstructCard } from '../utils/inventory';
+import { del as cacheDelete } from '../utils/cache';
 import { CardListing, PackListing } from '../types/inventory';
+import { RouteConfig } from '../types/route';
 
 interface UnlistCardRequest {
   type: 'card';
@@ -21,13 +23,14 @@ interface UnlistPackRequest {
 
 type UnlistRequest = UnlistCardRequest | UnlistPackRequest;
 
-/**
- * @route POST /marketplace/unlist
- * @auth
- * @timeout 5
- * @memory 256
- * @description Unlists an item from the marketplace
- */
+export const route: RouteConfig = {
+  method: 'POST',
+  path: '/marketplace/unlist',
+  auth: true,
+  timeout: 5,
+  memory: 256,
+};
+
 export const handler: APIGatewayProxyHandler = async event => {
   const parsed = parseBody<UnlistRequest>(event.body);
   if (!parsed.success) return parsed.response;
@@ -78,6 +81,8 @@ export const handler: APIGatewayProxyHandler = async event => {
           { type: 'Delete', pk: `ITEM_LISTINGS#CARD#${listing.cardName}`, sk: cardId },
         );
 
+        cacheDelete(`listings:card:${listing.cardName}`);
+
         if (inventory.exists) {
           operations.push({
             type: 'Update',
@@ -113,6 +118,8 @@ export const handler: APIGatewayProxyHandler = async event => {
           { type: 'Delete', pk: `USER_LISTINGS#${userId}`, sk: `PACK#${listingId}` },
           { type: 'Delete', pk: `ITEM_LISTINGS#PACK#${listing.packName}`, sk: listingId },
         );
+
+        cacheDelete(`listings:pack:${listing.packName}`);
 
         if (inventory.exists) {
           operations.push({

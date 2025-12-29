@@ -5,7 +5,9 @@ import { withRetry } from '../utils/retry';
 import { db } from '../utils/db';
 import { getUserListings } from '../utils/marketplace';
 import { parseInventoryItem } from '../utils/inventory';
+import { del as cacheDelete } from '../utils/cache';
 import { CardListing, PackListing, MarketplaceListing } from '../types/inventory';
+import { RouteConfig } from '../types/route';
 import { randomUUID } from 'crypto';
 
 interface ListCardRequest {
@@ -28,13 +30,14 @@ type ListRequest = ListCardRequest | ListPackRequest;
 
 const MAX_LISTINGS = 256;
 
-/**
- * @route POST /marketplace/list
- * @auth
- * @timeout 5
- * @memory 256
- * @description Lists a card or pack for sale on the marketplace (max 256 per user)
- */
+export const route: RouteConfig = {
+  method: 'POST',
+  path: '/marketplace/list',
+  auth: true,
+  timeout: 5,
+  memory: 256,
+};
+
 export const handler: APIGatewayProxyHandler = async event => {
   const parsed = parseBody<ListRequest>(event.body);
   if (!parsed.success) return parsed.response;
@@ -122,8 +125,10 @@ export const handler: APIGatewayProxyHandler = async event => {
             item: { cardId, type: 'card' },
             condition: 'attribute_not_exists(pk)',
           },
-          { type: 'Put', pk: `ITEM_LISTINGS#CARD#${card.cardName}`, sk: cardId, item: { sellerId: userId, cost } },
+          { type: 'Put', pk: `ITEM_LISTINGS#CARD#${card.cardName}`, sk: cardId, item: { ...listing } },
         );
+
+        cacheDelete(`listings:card:${card.cardName}`);
       } else {
         const packName = (parsed.data as ListPackRequest).packName;
 
@@ -160,8 +165,10 @@ export const handler: APIGatewayProxyHandler = async event => {
             item: { listingId, packName, type: 'pack' },
             condition: 'attribute_not_exists(pk)',
           },
-          { type: 'Put', pk: `ITEM_LISTINGS#PACK#${packName}`, sk: listingId, item: { sellerId: userId, cost } },
+          { type: 'Put', pk: `ITEM_LISTINGS#PACK#${packName}`, sk: listingId, item: { ...listing } },
         );
+
+        cacheDelete(`listings:pack:${packName}`);
       }
 
       operations.push({

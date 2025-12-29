@@ -1,13 +1,15 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
 import { badRequest, success, serverError } from '../utils/response';
 import { getUserListings } from '../utils/marketplace';
+import { RouteConfig } from '../types/route';
 
-/**
- * @route GET /marketplace/listings/{userId}
- * @timeout 5
- * @memory 256
- * @description Get all marketplace listings for a specific user
- */
+export const route: RouteConfig = {
+  method: 'GET',
+  path: '/marketplace/listings/{userId}',
+  timeout: 5,
+  memory: 256,
+};
+
 export const handler: APIGatewayProxyHandler = async event => {
   const userId = event.pathParameters?.userId;
 

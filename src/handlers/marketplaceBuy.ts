@@ -5,7 +5,9 @@ import { withRetry } from '../utils/retry';
 import { db } from '../utils/db';
 import { getUserListings, calculateNewRap } from '../utils/marketplace';
 import { parseInventoryItem, reconstructCard } from '../utils/inventory';
+import { del as cacheDelete } from '../utils/cache';
 import { CardListing, PackListing, RapRecord } from '../types/inventory';
+import { RouteConfig } from '../types/route';
 
 interface BuyCardRequest {
   type: 'card';
@@ -23,13 +25,14 @@ interface BuyPackRequest {
 
 type BuyRequest = BuyCardRequest | BuyPackRequest;
 
-/**
- * @route POST /marketplace/buy
- * @auth
- * @timeout 10
- * @memory 256
- * @description Purchases a card or pack from the marketplace
- */
+export const route: RouteConfig = {
+  method: 'POST',
+  path: '/marketplace/buy',
+  auth: true,
+  timeout: 10,
+  memory: 256,
+};
+
 export const handler: APIGatewayProxyHandler = async event => {
   const parsed = parseBody<BuyRequest>(event.body);
   if (!parsed.success) return parsed.response;
@@ -144,6 +147,10 @@ async function handleCardPurchase(request: BuyCardRequest) {
 
   await db.transactWrite(operations);
 
+  cacheDelete(`listings:card:${listing.cardName}`);
+  cacheDelete(`rap:card:${listing.cardName}`);
+  cacheDelete('marketplace:history');
+
   const sellerListings = await getUserListings(listing.sellerId);
 
   return success(
@@ -243,6 +250,10 @@ async function handlePackPurchase(request: BuyPackRequest) {
   }
 
   await db.transactWrite(operations);
+
+  cacheDelete(`listings:pack:${listing.packName}`);
+  cacheDelete(`rap:pack:${listing.packName}`);
+  cacheDelete('marketplace:history');
 
   const [sellerListings, sellerInventoryItem] = await Promise.all([
     getUserListings(listing.sellerId),

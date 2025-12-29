@@ -1,7 +1,9 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
 import { badRequest, success, serverError } from '../utils/response';
 import { db } from '../utils/db';
+import { cached, cachedBatch, TTL } from '../utils/cache';
 import { MarketplaceListing, RapRecord } from '../types/inventory';
+import { RouteConfig } from '../types/route';
 
 interface ActiveSeller {
   userId: string;
@@ -18,11 +20,13 @@ type ListingWithSeller = MarketplaceListing & {
 
 const ACTIVE_SELLER_TIMEOUT_MS = 60_000;
 
-/**
- * @route GET /marketplace/find-sellers
- * @timeout 10
- * @memory 256
- */
+export const route: RouteConfig = {
+  method: 'GET',
+  path: '/marketplace/find-sellers',
+  timeout: 10,
+  memory: 256,
+};
+
 export const handler: APIGatewayProxyHandler = async event => {
   const itemName = event.queryStringParameters?.itemName;
   const itemType = event.queryStringParameters?.itemType as 'card' | 'pack' | undefined;
@@ -36,42 +40,48 @@ export const handler: APIGatewayProxyHandler = async event => {
   }
 
   try {
-    const [itemListingsResult, rapItem] = await Promise.all([
-      db.query(`ITEM_LISTINGS#${itemType.toUpperCase()}#${itemName}`),
-      db.get(`RAP#${itemType.toUpperCase()}#${itemName}`, 'CURRENT'),
-    ]);
+    const rapPromise = cached(`rap:${itemType}:${itemName}`, TTL.RAP, async () => {
+      const rapItem = await db.get(`RAP#${itemType.toUpperCase()}#${itemName}`, 'CURRENT');
+      return (rapItem as RapRecord)?.rap;
+    });
 
-    if (itemListingsResult.items.length === 0) {
+    const listingsPromise = cached(`listings:${itemType}:${itemName}`, TTL.LISTINGS_INDEX, async () => {
+      const result = await db.query(`ITEM_LISTINGS#${itemType.toUpperCase()}#${itemName}`);
+      return result.items as unknown as MarketplaceListing[];
+    });
+
+    const [rap, listings] = await Promise.all([rapPromise, listingsPromise]);
+
+    if (!listings || listings.length === 0) {
       return success({ itemName, itemType, listings: [], count: 0 });
     }
 
-    const listingKeys = itemListingsResult.items.map(item => ({
-      pk: `LISTING#${itemType.toUpperCase()}#${item.sk as string}`,
-      sk: 'LISTING',
-    }));
-
-    const listings = (await db.batchGet(listingKeys)).filter(Boolean) as unknown as MarketplaceListing[];
-    if (listings.length === 0) {
-      return success({ itemName, itemType, listings: [], count: 0 });
-    }
-
+    // Get active seller statuses with batch caching
     const sellerIds = [...new Set(listings.map(l => l.sellerId))];
-    const sellerKeys = sellerIds.map(id => ({ pk: `ACTIVE_SELLER#${id}`, sk: 'STATUS' }));
-    const sellerRecords = await db.batchGet(sellerKeys);
+    const sellerCacheKeys = sellerIds.map(id => `seller:${id}`);
+
+    const sellerMap = await cachedBatch<ActiveSeller | null>(sellerCacheKeys, TTL.ACTIVE_SELLERS, async missingKeys => {
+      const missingIds = missingKeys.map(k => k.replace('seller:', ''));
+      const sellerKeys = missingIds.map(id => ({ pk: `ACTIVE_SELLER#${id}`, sk: 'STATUS' }));
+      const records = await db.batchGet(sellerKeys);
+
+      const result = new Map<string, ActiveSeller | null>();
+      const recordMap = new Map(
+        records.map(r => [(r as unknown as ActiveSeller).userId, r as unknown as ActiveSeller]),
+      );
+
+      for (const id of missingIds) {
+        result.set(`seller:${id}`, recordMap.get(id) || null);
+      }
+      return result;
+    });
 
     const now = Date.now();
-    const activeSellerMap = new Map<string, ActiveSeller>();
-    for (const record of sellerRecords) {
-      const seller = record as unknown as ActiveSeller;
-      if (seller.active && now - new Date(seller.lastUpdated).getTime() < ACTIVE_SELLER_TIMEOUT_MS) {
-        activeSellerMap.set(seller.userId, seller);
-      }
-    }
-
     const activeListings: ListingWithSeller[] = [];
+
     for (const listing of listings) {
-      const seller = activeSellerMap.get(listing.sellerId);
-      if (seller) {
+      const seller = sellerMap.get(`seller:${listing.sellerId}`);
+      if (seller?.active && now - new Date(seller.lastUpdated).getTime() < ACTIVE_SELLER_TIMEOUT_MS) {
         activeListings.push({ ...listing, sellerJobId: seller.jobId, sellerBoothIdx: seller.boothIdx });
       }
     }
@@ -80,7 +90,6 @@ export const handler: APIGatewayProxyHandler = async event => {
       return success({ itemName, itemType, listings: [], count: 0 });
     }
 
-    const rap = (rapItem as RapRecord)?.rap;
     const sortedListings = sortListingsByRapPriority(activeListings, rap);
     const result = sortedListings.slice(0, 30);
 

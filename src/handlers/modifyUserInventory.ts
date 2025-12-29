@@ -4,14 +4,16 @@ import { parseBody } from '../utils/request';
 import { db } from '../utils/db';
 import { parseInventoryItem } from '../utils/inventory';
 import { ModifyInventoryRequest } from '../types/inventory';
+import { RouteConfig } from '../types/route';
 
-/**
- * @route POST /user/inventory/modify
- * @auth
- * @timeout 5
- * @memory 256
- * @description Modifies a user's inventory
- */
+export const route: RouteConfig = {
+  method: 'POST',
+  path: '/user/inventory/modify',
+  auth: true,
+  timeout: 5,
+  memory: 256,
+};
+
 export const handler: APIGatewayProxyHandler = async event => {
   const parsed = parseBody<ModifyInventoryRequest>(event.body);
   if (!parsed.success) return parsed.response;

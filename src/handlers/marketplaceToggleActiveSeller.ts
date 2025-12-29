@@ -2,6 +2,7 @@ import { APIGatewayProxyHandler } from 'aws-lambda';
 import { badRequest, success, serverError } from '../utils/response';
 import { parseBody } from '../utils/request';
 import { db } from '../utils/db';
+import { RouteConfig } from '../types/route';
 
 interface ActiveSellerEntry {
   userId: string;
@@ -10,12 +11,14 @@ interface ActiveSellerEntry {
   boothIdx: number;
 }
 
-/**
- * @route POST /marketplace/sellers/toggle
- * @auth
- * @timeout 5
- * @memory 256
- */
+export const route: RouteConfig = {
+  method: 'POST',
+  path: '/marketplace/sellers/toggle',
+  auth: true,
+  timeout: 5,
+  memory: 256,
+};
+
 export const handler: APIGatewayProxyHandler = async event => {
   const parsed = parseBody<ActiveSellerEntry[]>(event.body);
   if (!parsed.success) return parsed.response;

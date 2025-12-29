@@ -1,15 +1,15 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
 import { buildResponse } from '../utils/response';
+import { RouteConfig } from '../types/route';
 
-/**
- * @route ANY /{proxy+}
- * @timeout 3
- * @memory 128
- * @description Catch-all handler for undefined routes - returns 404
- */
+export const route: RouteConfig = {
+  method: 'ANY',
+  path: '/{proxy+}',
+  timeout: 3,
+  memory: 128,
+};
+
 export const handler: APIGatewayProxyHandler = async event => {
-  console.log('404 - Route not found:', event.path);
-
   return buildResponse(404, {
     success: false,
     error: 'Not Found',

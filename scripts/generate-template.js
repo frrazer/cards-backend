@@ -7,55 +7,62 @@ const path = require('path');
 const HANDLERS_DIR = path.join(__dirname, '..', 'src', 'handlers');
 const TEMPLATE_PATH = path.join(__dirname, '..', 'template.yaml');
 
-const parseHandler = (filePath) => {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const docBlock = content.match(/\/\*\*([\s\S]*?)\*\/[\s\S]*?export\s+const\s+handler/)?.[1];
+const parseHandler = filePath => {
+  const content = fs.readFileSync(filePath, 'utf-8');
 
-    if (!docBlock) return null;
+  const routeMatch = content.match(
+    /export\s+const\s+route\s*(?::\s*RouteConfig)?\s*=\s*(\{[\s\S]*?\})\s*(?:as\s+const)?;/,
+  );
+  if (!routeMatch) return null;
 
-    const routeMatch = docBlock.match(/@route\s+(GET|POST|PUT|DELETE|PATCH|ANY)\s+(\/[\w\-\/{}+]*)/i);
-    if (!routeMatch) return null;
+  let config;
+  try {
+    const configStr = routeMatch[1]
+      .replace(/(\w+):/g, '"$1":')
+      .replace(/'/g, '"')
+      .replace(/,\s*}/g, '}')
+      .replace(/,\s*,/g, ',');
+    config = JSON.parse(configStr);
+  } catch {
+    console.warn(`⚠️  Could not parse route config in ${path.basename(filePath)}`);
+    return null;
+  }
 
-    return {
-        fileName: path.basename(filePath, '.ts'),
-        method: routeMatch[1].toUpperCase(),
-        path: routeMatch[2],
-        timeout: docBlock.match(/@timeout\s+(\d+)/)?.[1],
-        memory: docBlock.match(/@memory\s+(\d+)/)?.[1],
-        description: docBlock.match(/@description\s+(.+)/)?.[1]?.trim(),
-        requiresAuth: /@auth/i.test(docBlock),
-        isCatchAll: routeMatch[2] === '/{proxy+}',
-    };
+  if (!config.method || !config.path) return null;
+
+  return {
+    fileName: path.basename(filePath, '.ts'),
+    method: config.method.toUpperCase(),
+    path: config.path,
+    timeout: config.timeout,
+    memory: config.memory,
+    description: config.description,
+    requiresAuth: config.auth === true,
+    isCatchAll: config.path === '/{proxy+}',
+  };
 };
 
-const getFuncName = (name) => `${name.charAt(0).toUpperCase() + name.slice(1)}Function`;
+const getFuncName = name => `${name.charAt(0).toUpperCase() + name.slice(1)}Function`;
 
-const generateTemplate = (handlers) => {
-    // Separate catch-all handlers from regular handlers
-    const regularHandlers = handlers.filter((h) => !h.isCatchAll);
-    const catchAllHandlers = handlers.filter((h) => h.isCatchAll);
+const generateTemplate = handlers => {
+  const regularHandlers = handlers.filter(h => !h.isCatchAll);
+  const catchAllHandlers = handlers.filter(h => h.isCatchAll);
 
-    // Regular handlers first
-    const resources = regularHandlers
-        .map((h) => {
-            const props = [
-                h.description && `    Description: ${h.description}`,
-                h.timeout && `    Timeout: ${h.timeout}`,
-                h.memory && `    MemorySize: ${h.memory}`,
-            ]
-                .filter(Boolean)
-                .join('\n');
+  const generateResource = h => {
+    const props = [
+      h.description && `    Description: ${h.description}`,
+      h.timeout && `    Timeout: ${h.timeout}`,
+      h.memory && `    MemorySize: ${h.memory}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
 
-            // No need for AUTH_TOKEN in individual functions anymore
-            // The authorizer handles it
-
-            const authConfig = h.requiresAuth
-                ? `            Auth:
+    const authConfig = h.requiresAuth
+      ? `            Auth:
               Authorizer: ApiAuthorizer`
-                : '';
+      : '';
 
-            return `  # ${h.method} ${h.path}${h.requiresAuth ? ' [AUTH REQUIRED]' : ''}
-  ${getFuncName(h.fileName)}:
+    return `  ${getFuncName(h.fileName)}:
     Type: AWS::Serverless::Function
 ${props}
     Metadata:
@@ -80,79 +87,36 @@ ${props}
             Path: ${h.path}
             Method: ${h.method.toLowerCase()}
 ${authConfig}`;
-        })
-        .join('\n\n');
+  };
 
-    // Catch-all handlers last (so they don't override specific routes)
-    const catchAllResources = catchAllHandlers
-        .map((h) => {
-            const props = [
-                h.description && `    Description: ${h.description}`,
-                h.timeout && `    Timeout: ${h.timeout}`,
-                h.memory && `    MemorySize: ${h.memory}`,
-            ]
-                .filter(Boolean)
-                .join('\n');
+  const resources = regularHandlers.map(generateResource).join('\n\n');
+  const catchAllResources = catchAllHandlers.map(generateResource).join('\n\n');
 
-            const authConfig = h.requiresAuth
-                ? `            Auth:
-              Authorizer: ApiAuthorizer`
-                : '';
-
-            return `  # ${h.method} ${h.path}${h.requiresAuth ? ' [AUTH REQUIRED]' : ''}
-  ${getFuncName(h.fileName)}:
-    Type: AWS::Serverless::Function
-${props}
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: true
-        Target: "es2020"
-        Sourcemap: true
-        EntryPoints: 
-          - src/handlers/${h.fileName}.ts
-    Properties:
-      CodeUri: ./
-      Handler: src/handlers/${h.fileName}.handler
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MainTable
-      Events:
-        ApiEvent:
-          Type: Api
-          Properties:
-            RestApiId: !Ref MyApi
-            Path: ${h.path}
-            Method: ${h.method.toLowerCase()}
-${authConfig}`;
-        })
-        .join('\n\n');
-
-    return resources + (catchAllResources ? '\n\n' + catchAllResources : '');
+  return resources + (catchAllResources ? '\n\n' + catchAllResources : '');
 };
 
 (() => {
-    console.log('🚀 Generating SAM template...');
+  console.log('🚀 Generating SAM template...');
 
-    if (!fs.existsSync(HANDLERS_DIR)) {
-        console.error('❌ Handlers directory not found:', HANDLERS_DIR);
-        process.exit(1);
-    }
+  if (!fs.existsSync(HANDLERS_DIR)) {
+    console.error('❌ Handlers directory not found:', HANDLERS_DIR);
+    process.exit(1);
+  }
 
-    const handlers = fs
-        .readdirSync(HANDLERS_DIR)
-        .filter((f) => f.endsWith('.ts'))
-        .map((f) => parseHandler(path.join(HANDLERS_DIR, f)))
-        .filter(Boolean);
+  const handlers = fs
+    .readdirSync(HANDLERS_DIR)
+    .filter(f => f.endsWith('.ts'))
+    .map(f => parseHandler(path.join(HANDLERS_DIR, f)))
+    .filter(Boolean);
 
-    if (handlers.length === 0) {
-        console.error('❌ No annotated handlers found (needs @route tag)');
-        process.exit(1);
-    }
+  if (handlers.length === 0) {
+    console.error('❌ No handlers with route config found');
+    process.exit(1);
+  }
 
-    handlers.forEach((h) => console.log(`   • ${h.method.padEnd(6)} ${h.path.padEnd(20)} → ${h.fileName}`));
+  handlers.forEach(h => console.log(`   • ${h.method.padEnd(6)} ${h.path.padEnd(30)} → ${h.fileName}`));
 
-    const template = `AWSTemplateFormatVersion: '2010-09-09'
+  const template = `AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Scalable TypeScript Backend API - Cards API
 
@@ -174,7 +138,6 @@ Globals:
         TABLE_NAME: !Ref MainTable
 
 Resources:
-  # WAF Web ACL for API Protection
   ApiWebACL:
     Type: AWS::WAFv2::WebACL
     Properties:
@@ -183,7 +146,6 @@ Resources:
       DefaultAction:
         Block: {}
       Rules:
-        # Rule 1: Require specific header
         - Name: RequireCustomHeader
           Priority: 1
           Statement:
@@ -202,8 +164,6 @@ Resources:
             SampledRequestsEnabled: true
             CloudWatchMetricsEnabled: true
             MetricName: RequireCustomHeader
-        
-        # Rule 2: Rate limiting per IP (100 requests per 5 minutes)
         - Name: RateLimitPerIP
           Priority: 2
           Statement:
@@ -221,7 +181,6 @@ Resources:
         CloudWatchMetricsEnabled: true
         MetricName: !Sub "\${AWS::StackName}-\${Env}-waf"
 
-  # Associate WAF with API Gateway
   ApiWebACLAssociation:
     Type: AWS::WAFv2::WebACLAssociation
     Properties:
@@ -247,7 +206,6 @@ Resources:
         AllowHeaders: !Sub "'Content-Type,Authorization,\${WafHeaderName}'"
         AllowOrigin: "'*'"
   
-  # Lambda Authorizer Function
   AuthorizerFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -302,6 +260,6 @@ Outputs:
     Value: !GetAtt MainTable.Arn
 `;
 
-    fs.writeFileSync(TEMPLATE_PATH, template, 'utf-8');
-    console.log('\n✨ Template generated successfully: template.yaml');
+  fs.writeFileSync(TEMPLATE_PATH, template, 'utf-8');
+  console.log('\n✨ Template generated successfully: template.yaml');
 })();

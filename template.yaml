@@ -20,7 +20,6 @@ Globals:
         TABLE_NAME: !Ref MainTable
 
 Resources:
-  # WAF Web ACL for API Protection
   ApiWebACL:
     Type: AWS::WAFv2::WebACL
     Properties:
@@ -29,7 +28,6 @@ Resources:
       DefaultAction:
         Block: {}
       Rules:
-        # Rule 1: Require specific header
         - Name: RequireCustomHeader
           Priority: 1
           Statement:
@@ -48,8 +46,6 @@ Resources:
             SampledRequestsEnabled: true
             CloudWatchMetricsEnabled: true
             MetricName: RequireCustomHeader
-        
-        # Rule 2: Rate limiting per IP (100 requests per 5 minutes)
         - Name: RateLimitPerIP
           Priority: 2
           Statement:
@@ -67,7 +63,6 @@ Resources:
         CloudWatchMetricsEnabled: true
         MetricName: !Sub "${AWS::StackName}-${Env}-waf"
 
-  # Associate WAF with API Gateway
   ApiWebACLAssociation:
     Type: AWS::WAFv2::WebACLAssociation
     Properties:
@@ -93,7 +88,6 @@ Resources:
         AllowHeaders: !Sub "'Content-Type,Authorization,${WafHeaderName}'"
         AllowOrigin: "'*'"
   
-  # Lambda Authorizer Function
   AuthorizerFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -134,10 +128,8 @@ Resources:
         - Key: Environment
           Value: !Ref Env
 
-  # GET /heartbeat
   GetHeartbeatFunction:
     Type: AWS::Serverless::Function
-    Description: Health check endpoint for API monitoring
     Timeout: 3
     MemorySize: 128
     Metadata:
@@ -163,10 +155,8 @@ Resources:
             Method: get
 
 
-  # GET /protected/example [AUTH REQUIRED]
   GetProtectedExampleFunction:
     Type: AWS::Serverless::Function
-    Description: Example protected endpoint that requires authentication
     Timeout: 3
     MemorySize: 128
     Metadata:
@@ -193,10 +183,8 @@ Resources:
             Auth:
               Authorizer: ApiAuthorizer
 
-  # GET /user/inventory/{userId}
   GetUserInventoryFunction:
     Type: AWS::Serverless::Function
-    Description: Retrieves a user's inventory
     Timeout: 3
     MemorySize: 128
     Metadata:
@@ -222,10 +210,8 @@ Resources:
             Method: get
 
 
-  # POST /marketplace/buy [AUTH REQUIRED]
   MarketplaceBuyFunction:
     Type: AWS::Serverless::Function
-    Description: Purchases a card or pack from the marketplace
     Timeout: 10
     MemorySize: 256
     Metadata:
@@ -252,7 +238,6 @@ Resources:
             Auth:
               Authorizer: ApiAuthorizer
 
-  # GET /marketplace/find-sellers
   MarketplaceFindActiveSellersFunction:
     Type: AWS::Serverless::Function
     Timeout: 10
@@ -280,10 +265,8 @@ Resources:
             Method: get
 
 
-  # GET /marketplace/history
   MarketplaceGetHistoryFunction:
     Type: AWS::Serverless::Function
-    Description: Get RAP history for all cards and packs with marketplace activity
     Timeout: 10
     MemorySize: 256
     Metadata:
@@ -309,10 +292,8 @@ Resources:
             Method: get
 
 
-  # GET /marketplace/listings/{userId}
   MarketplaceGetListingsFunction:
     Type: AWS::Serverless::Function
-    Description: Get all marketplace listings for a specific user
     Timeout: 5
     MemorySize: 256
     Metadata:
@@ -338,10 +319,8 @@ Resources:
             Method: get
 
 
-  # POST /marketplace/list [AUTH REQUIRED]
   MarketplaceListFunction:
     Type: AWS::Serverless::Function
-    Description: Lists a card or pack for sale on the marketplace (max 256 per user)
     Timeout: 5
     MemorySize: 256
     Metadata:
@@ -368,7 +347,6 @@ Resources:
             Auth:
               Authorizer: ApiAuthorizer
 
-  # POST /marketplace/sellers/toggle [AUTH REQUIRED]
   MarketplaceToggleActiveSellerFunction:
     Type: AWS::Serverless::Function
     Timeout: 5
@@ -397,10 +375,8 @@ Resources:
             Auth:
               Authorizer: ApiAuthorizer
 
-  # POST /marketplace/unlist [AUTH REQUIRED]
   MarketplaceUnlistFunction:
     Type: AWS::Serverless::Function
-    Description: Unlists an item from the marketplace
     Timeout: 5
     MemorySize: 256
     Metadata:
@@ -427,10 +403,8 @@ Resources:
             Auth:
               Authorizer: ApiAuthorizer
 
-  # POST /user/inventory/modify [AUTH REQUIRED]
   ModifyUserInventoryFunction:
     Type: AWS::Serverless::Function
-    Description: Modifies a user's inventory
     Timeout: 5
     MemorySize: 256
     Metadata:
@@ -457,10 +431,8 @@ Resources:
             Auth:
               Authorizer: ApiAuthorizer
 
-  # POST /transfer [AUTH REQUIRED]
   TransferBetweenUsersFunction:
     Type: AWS::Serverless::Function
-    Description: Atomically execute multi-way trades between users
     Timeout: 10
     MemorySize: 256
     Metadata:
@@ -487,10 +459,8 @@ Resources:
             Auth:
               Authorizer: ApiAuthorizer
 
-  # ANY /{proxy+}
   NotFoundFunction:
     Type: AWS::Serverless::Function
-    Description: Catch-all handler for undefined routes - returns 404
     Timeout: 3
     MemorySize: 128
     Metadata:

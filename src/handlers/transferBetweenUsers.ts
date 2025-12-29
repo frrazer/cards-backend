@@ -4,6 +4,7 @@ import { parseBody } from '../utils/request';
 import { withRetry } from '../utils/retry';
 import { db } from '../utils/db';
 import { parseInventoryItem, ParsedInventory } from '../utils/inventory';
+import { RouteConfig } from '../types/route';
 
 interface Transfer {
   fromUserId: string;
@@ -28,13 +29,14 @@ async function idempotentResponse(key: string, statusCode: number, body: Record<
   return buildResponse(statusCode, body);
 }
 
-/**
- * @route POST /transfer
- * @auth
- * @timeout 10
- * @memory 256
- * @description Atomically execute multi-way trades between users
- */
+export const route: RouteConfig = {
+  method: 'POST',
+  path: '/transfer',
+  auth: true,
+  timeout: 10,
+  memory: 256,
+};
+
 export const handler: APIGatewayProxyHandler = async event => {
   const idempotencyKey = event.headers['Idempotency-Key'] || event.headers['idempotency-key'];
 
