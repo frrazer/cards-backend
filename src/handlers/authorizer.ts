@@ -20,7 +20,6 @@ export const handler: APIGatewayRequestAuthorizerHandler = async event => {
   }
 
   const isValid = token === authToken;
-
   console.log('Authorization attempt:', {
     methodArn: event.methodArn,
     isValid,
