@@ -76,7 +76,7 @@ async function handleCardPurchase(request: BuyCardRequest) {
     return conflict(`Price changed. Expected ${expectedCost}, actual ${listing.cost}`);
   }
 
-  if (listing.sellerId === buyerId) {
+  if (listing.sellerId === buyerId && process.env.NODE_ENV !== 'dev') {
     return badRequest('Cannot buy your own listing');
   }
 
@@ -180,7 +180,7 @@ async function handlePackPurchase(request: BuyPackRequest) {
 
   const listing = listingItem as unknown as PackListing;
 
-  if (listing.sellerId === buyerId) {
+  if (listing.sellerId === buyerId && process.env.NODE_ENV !== 'dev') {
     return badRequest('Cannot buy your own listing');
   }
 
